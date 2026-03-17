@@ -1,0 +1,142 @@
+{
+  "projectType": "saas",
+  "projectName": "Ubik Backend",
+  "projectDescription": "A reactive microservices platform for motel/hotel property management, enabling property owners to list and manage establishments and clients to discover and book rooms.",
+  "theme": "sequoia",
+  "primaryColor": "#4F46E5",
+  "lightColor": "#818CF8",
+  "darkColor": "#3730A3",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "architecture"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/user-management",
+              "features/motel-management",
+              "features/reservations",
+              "features/payments",
+              "features/notifications"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/docker",
+              "deployment/environment-variables",
+              "deployment/azure"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Authentication",
+            "pages": [
+              "api/auth/register",
+              "api/auth/login",
+              "api/auth/reset-password"
+            ]
+          },
+          {
+            "group": "User Management",
+            "pages": [
+              "api/users/profile",
+              "api/users/update"
+            ]
+          },
+          {
+            "group": "Motel Management",
+            "pages": [
+              "api/motels/list",
+              "api/motels/create",
+              "api/motels/update",
+              "api/motels/delete",
+              "api/motels/admin"
+            ]
+          },
+          {
+            "group": "Rooms & Services",
+            "pages": [
+              "api/rooms/overview",
+              "api/services/overview"
+            ]
+          },
+          {
+            "group": "Reservations",
+            "pages": [
+              "api/reservations/create",
+              "api/reservations/manage"
+            ]
+          },
+          {
+            "group": "Payments",
+            "pages": [
+              "api/payments/create",
+              "api/payments/webhook",
+              "api/payments/oauth"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Reactive microservices architecture with Spring WebFlux and R2DBC",
+    "JWT-based authentication with role-based access control (Admin, Property Owner, User)",
+    "Motel management with approval workflow (Pending, Under Review, Approved, Rejected)",
+    "Room and service catalog with availability checking",
+    "Reservation lifecycle management (create, confirm, check-in, check-out, cancel)",
+    "MercadoPago payment integration with OAuth and webhook support",
+    "Email notification service for reservation and payment events",
+    "API Gateway with JWT validation and route-based authorization",
+    "Cloudinary image upload for motel photos",
+    "Angular PWA frontend with geolocation and map integration"
+  ],
+  "publicApiSurface": [
+    "POST /api/auth/register",
+    "POST /api/auth/login",
+    "POST /api/auth/reset-password-request",
+    "POST /api/auth/reset-password",
+    "GET /api/user/profile",
+    "PUT /api/user/profile",
+    "GET /api/motels",
+    "GET /api/motels/{id}",
+    "GET /api/motels/city/{city}",
+    "POST /api/motels",
+    "PUT /api/motels/{id}",
+    "DELETE /api/motels/{id}",
+    "GET /api/admin/motels",
+    "GET /api/admin/motels/pending",
+    "POST /api/admin/motels/{id}/approve",
+    "POST /api/admin/motels/{id}/reject",
+    "PATCH /api/admin/motels/{id}/review",
+    "GET /api/rooms",
+    "POST /api/rooms",
+    "GET /api/services",
+    "POST /api/services",
+    "GET /api/reservations",
+    "POST /api/reservations",
+    "PATCH /api/reservations/{id}/confirm",
+    "PATCH /api/reservations/{id}/cancel",
+    "PATCH /api/reservations/{id}/checkin",
+    "PATCH /api/reservations/{id}/checkout",
+    "POST /api/payments",
+    "GET /api/payments/{id}",
+    "POST /api/payments/webhook",
+    "POST /api/payments/{id}/refund",
+    "POST /api/notifications/send"
+  ]
+}
