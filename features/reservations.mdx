@@ -1,0 +1,138 @@
+---
+title: "Reservations"
+description: "Check room availability, create reservations, and manage the full lifecycle from confirmation through check-out or cancellation."
+---
+
+The reservations feature lives inside the motel management microservice and is exposed under `/api/reservations`. Creating a reservation requires authentication; read operations are currently open.
+
+## Reservation domain model
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `Long` | Auto-generated primary key |
+| `roomId` | `Long` | The room being reserved |
+| `userId` | `Long` | Set from the authenticated user; ignored if sent in the request body |
+| `checkInDate` | `LocalDateTime` | Planned check-in timestamp (ISO 8601) |
+| `checkOutDate` | `LocalDateTime` | Planned check-out timestamp (ISO 8601) |
+| `status` | `ReservationStatus` | Current lifecycle state |
+| `totalPrice` | `Double` | Total cost of the stay |
+| `specialRequests` | `String` | Free-text guest notes |
+| `confirmationCode` | `String` | System-generated confirmation code |
+| `createdAt` | `LocalDateTime` | Creation timestamp |
+| `updatedAt` | `LocalDateTime` | Last update timestamp |
+
+## Reservation status lifecycle
+
+Every reservation starts as `PENDING` and moves forward one step at a time. Cancellation is only possible from `PENDING` or `CONFIRMED`.
+
+```
+PENDING ──► CONFIRMED ──► CHECKED_IN ──► CHECKED_OUT
+   │              │
+   └──────────────┴──────────────────────► CANCELLED
+```
+
+| Status | Meaning | Allowed transitions |
+|--------|---------|--------------------|
+| `PENDING` | Created, awaiting confirmation | → `CONFIRMED`, → `CANCELLED` |
+| `CONFIRMED` | Payment processed, stay confirmed | → `CHECKED_IN`, → `CANCELLED` |
+| `CHECKED_IN` | Guest has arrived | → `CHECKED_OUT` |
+| `CHECKED_OUT` | Stay completed | (terminal) |
+| `CANCELLED` | Reservation was cancelled | (terminal) |
+
+## Check room availability
+
+Before creating a reservation, verify the room is free for your dates. Pass ISO 8601 datetime strings as query parameters.
+
+```bash
+curl "https://your-gateway/api/reservations/room/15/available
+  ?checkIn=2026-04-10T14:00:00
+  &checkOut=2026-04-13T12:00:00"
+```
+
+The endpoint returns `true` if the room is available or `false` if there is a conflicting active reservation.
+
+## Creating a reservation
+
+Send a `POST` to `/api/reservations`. The `userId` in the response is always taken from the authenticated user's session — you do not need to supply it.
+
+```bash
+curl -X POST https://your-gateway/api/reservations \
+  -H "Authorization: Bearer eyJhbGci..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "roomId": 15,
+    "checkInDate": "2026-04-10T14:00:00",
+    "checkOutDate": "2026-04-13T12:00:00",
+    "totalPrice": 450000.00,
+    "specialRequests": "Late check-in requested, arriving after 10 pm."
+  }'
+```
+
+A successful request returns `HTTP 201` with the full reservation object, including the system-generated `confirmationCode` and `status: PENDING`.
+
+## Full reservation flow
+
+<Steps>
+  <Step title="Check availability">
+    Call `GET /api/reservations/room/{roomId}/available` with your desired `checkIn` and `checkOut` query parameters. Proceed only if the response is `true`.
+  </Step>
+  <Step title="Create the reservation">
+    Call `POST /api/reservations`. Save the returned `id` and `confirmationCode`.
+  </Step>
+  <Step title="Complete payment">
+    Call `POST /api/payments` with the `reservationId` and the total amount. The payment service creates a MercadoPago preference and returns an `initPoint` URL. Direct the guest to that URL to complete payment.
+
+    When MercadoPago processes the payment and sends a webhook, the payment service automatically calls `PATCH /api/reservations/{id}/confirm`, transitioning the status to `CONFIRMED`.
+  </Step>
+  <Step title="Check in">
+    When the guest arrives, call the check-in endpoint. The reservation must be in `CONFIRMED` status.
+
+    ```bash
+    curl -X PATCH https://your-gateway/api/reservations/88/checkin \
+      -H "Authorization: Bearer eyJhbGci..."
+    ```
+  </Step>
+  <Step title="Check out">
+    When the guest departs, record the check-out. The reservation must be in `CHECKED_IN` status.
+
+    ```bash
+    curl -X PATCH https://your-gateway/api/reservations/88/checkout \
+      -H "Authorization: Bearer eyJhbGci..."
+    ```
+  </Step>
+</Steps>
+
+## Confirming a reservation manually
+
+If you need to confirm a reservation outside of the payment webhook flow:
+
+```bash
+curl -X PATCH https://your-gateway/api/reservations/88/confirm \
+  -H "Authorization: Bearer eyJhbGci..."
+```
+
+## Cancellation
+
+You can cancel a reservation that is in `PENDING` or `CONFIRMED` status. Cancelling a `CHECKED_IN` or `CHECKED_OUT` reservation returns an error.
+
+```bash
+curl -X PATCH https://your-gateway/api/reservations/88/cancel \
+  -H "Authorization: Bearer eyJhbGci..."
+```
+
+If a payment was already approved, cancelling through the refund flow (see [Payments](/features/payments)) also cancels the reservation automatically.
+
+<Warning>
+Deleting a reservation (`DELETE /api/reservations/{id}`) is only supported for reservations that are already in `CANCELLED` status. Attempting to delete an active reservation will fail.
+</Warning>
+
+## Query endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/reservations` | All reservations |
+| `GET` | `/api/reservations/{id}` | Single reservation by ID |
+| `GET` | `/api/reservations/room/{roomId}` | All reservations for a room |
+| `GET` | `/api/reservations/room/{roomId}/active` | Active (non-cancelled, non-checked-out) reservations for a room |
+| `GET` | `/api/reservations/user/{userId}` | All reservations for a user |
+| `GET` | `/api/reservations/status/{status}` | Reservations filtered by status string |

@@ -1,0 +1,113 @@
+---
+title: "Get user profile"
+description: "Retrieve the authenticated user's profile information, including contact details, location, and role."
+---
+
+`GET /api/user`
+
+Returns the full profile for the currently authenticated user. The user is identified by the `X-User-Username` header, which your API gateway injects from the validated JWT token.
+
+<Note>
+  You can also fetch a profile by numeric ID using `GET /api/user/{id}`. This is useful for admin operations where you need to look up another user.
+</Note>
+
+## Authentication
+
+<ParamField header="Authorization" type="string" required>
+  Bearer JWT token obtained from the login or register endpoints. Example: `Bearer eyJhbGci...`
+</ParamField>
+
+<Info>
+  The gateway extracts `X-User-Username` from the JWT and forwards it to this service. You do not set this header directly — passing a valid `Authorization` header is sufficient.
+</Info>
+
+## Path parameters
+
+The default endpoint (`GET /api/user`) uses the authenticated user's identity. To fetch a profile by ID:
+
+<ParamField path="id" type="number">
+  Numeric user ID. Only required when using the `GET /api/user/{id}` variant.
+</ParamField>
+
+## Response
+
+### 200 OK
+
+<ResponseField name="id" type="number" required>
+  Unique numeric identifier for the user.
+</ResponseField>
+
+<ResponseField name="username" type="string" required>
+  The user's unique username.
+</ResponseField>
+
+<ResponseField name="email" type="string" required>
+  The user's email address.
+</ResponseField>
+
+<ResponseField name="phoneNumber" type="string">
+  Contact phone number. `null` if not set.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string" required>
+  ISO 8601 datetime when the account was created (e.g., `"2024-03-01T10:30:00"`). 
+</ResponseField>
+
+<ResponseField name="anonymous" type="boolean" required>
+  Whether the account is operating in anonymous mode.
+</ResponseField>
+
+<ResponseField name="roleId" type="number" required>
+  Numeric ID of the role assigned to this user.
+</ResponseField>
+
+<ResponseField name="longitude" type="number">
+  Geographic longitude of the user's registered location, between `-180.0` and `180.0`. `null` if not set.
+</ResponseField>
+
+<ResponseField name="latitude" type="number">
+  Geographic latitude of the user's registered location, between `-90.0` and `90.0`. `null` if not set.
+</ResponseField>
+
+<ResponseField name="birthDate" type="string">
+  Date of birth in `YYYY-MM-DD` format. `null` if not set.
+</ResponseField>
+
+<ResponseField name="age" type="number">
+  Age in years, calculated from `birthDate`. `null` if `birthDate` is not set.
+</ResponseField>
+
+### Error responses
+
+| Status | Cause |
+|--------|-------|
+| `401 Unauthorized` | The `Authorization` header is missing or the token is invalid. |
+| `404 Not Found` | No user exists for the username extracted from the token. |
+
+## Example
+
+<CodeGroup>
+
+```bash cURL
+curl --request GET \
+  --url https://api.example.com/api/user \
+  --header 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqZG9lIiwicm9sZUlkIjoyLCJpYXQiOjE3MTA2OTkwMDB9.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c'
+```
+
+</CodeGroup>
+
+```json 200
+{
+  "id": 42,
+  "username": "jdoe",
+  "email": "jdoe@example.com",
+  "phoneNumber": "+1-555-0100",
+  "createdAt": "2024-03-01T10:30:00",
+  "anonymous": false,
+  "roleId": 2,
+  "longitude": -73.935242,
+  "latitude": 40.730610,
+  "birthDate": "1990-06-15",
+  "age": 35
+}
+```

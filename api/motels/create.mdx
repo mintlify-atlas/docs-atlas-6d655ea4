@@ -1,0 +1,178 @@
+---
+title: "Create motel"
+description: "Register a new motel listing. Requires authentication as a Property Owner or Admin."
+---
+
+## POST /api/motels
+
+Creates a new motel record and immediately assigns it the `PENDING` approval status. A newly created motel is not publicly visible until an admin approves it.
+
+<Info>
+  You must be authenticated as a **Property Owner** or **Admin** to call this endpoint. The API gateway forwards your identity via the `X-User-Username` and `X-User-Role` headers.
+</Info>
+
+### Ownership assignment
+
+You do not need to supply a `propertyId` in the request body. The server ignores any `propertyId` value you send and instead resolves your numeric user ID from the `X-User-Username` header by looking up your username in the database. This ensures a property owner cannot create a motel on behalf of another user.
+
+### Required headers (set by the gateway)
+
+<ParamField header="X-User-Username" type="string" required>
+  Username of the authenticated caller.
+</ParamField>
+
+<ParamField header="X-User-Role" type="string" required>
+  Role ID of the caller. Must match the configured `ROLE_ID_ADMIN` or `ROLE_ID_PROPERTY_OWNER` value.
+</ParamField>
+
+---
+
+## Request body
+
+### Basic information
+
+<ParamField body="name" type="string" required>
+  Display name of the motel. Must be between 3 and 100 characters.
+</ParamField>
+
+<ParamField body="address" type="string" required>
+  Street address of the property. Maximum 255 characters.
+</ParamField>
+
+<ParamField body="city" type="string" required>
+  City where the motel is located. Maximum 100 characters.
+</ParamField>
+
+<ParamField body="phoneNumber" type="string">
+  Contact phone number. Maximum 20 characters.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Short description of the property. Maximum 500 characters.
+</ParamField>
+
+<ParamField body="imageUrls" type="string[]">
+  List of image URLs. Maximum 10 entries; each URL must not exceed 500 characters.
+</ParamField>
+
+<ParamField body="latitude" type="number">
+  Geographic latitude of the property. Must be between -90 and 90.
+</ParamField>
+
+<ParamField body="longitude" type="number">
+  Geographic longitude of the property. Must be between -180 and 180.
+</ParamField>
+
+### Legal information
+
+All five required legal fields must be present before an admin can approve the motel. Submitting the motel without them is allowed, but approval will be blocked until the information is provided via an update.
+
+<ParamField body="rues" type="string" required>
+  Registro Único Empresarial y Social number. Maximum 100 characters.
+</ParamField>
+
+<ParamField body="rnt" type="string" required>
+  Registro Nacional de Turismo number. Maximum 100 characters.
+</ParamField>
+
+<ParamField body="ownerDocumentType" type="string" required>
+  Type of the owner's identity document. Accepted values: `CC`, `NIT`, `CE`, `PASAPORTE`.
+</ParamField>
+
+<ParamField body="ownerDocumentNumber" type="string" required>
+  Owner's identity document number. Maximum 50 characters.
+</ParamField>
+
+<ParamField body="ownerFullName" type="string" required>
+  Full legal name of the property owner. Maximum 200 characters.
+</ParamField>
+
+<ParamField body="legalRepresentativeName" type="string">
+  Name of the legal representative, if applicable. Maximum 200 characters.
+</ParamField>
+
+<ParamField body="legalDocumentUrl" type="string">
+  URL of the primary legal document (e.g., a signed PDF). Maximum 500 characters.
+</ParamField>
+
+---
+
+## Response
+
+**`201 Created`** — Returns the created motel as a [MotelResponse](/api/motels/list#motelresponse-fields). The `approvalStatus` field will be `PENDING` and `propertyId` will reflect your resolved user ID.
+
+### Error responses
+
+| Status | Cause |
+|--------|-------|
+| `400 Bad Request` | One or more validation constraints were violated. |
+| `401 Unauthorized` | `X-User-Username` header is absent or blank. |
+| `403 Forbidden` | The caller's role is neither Property Owner nor Admin. |
+| `404 Not Found` | No user record exists for the username in `X-User-Username`. |
+
+---
+
+## Example
+
+<CodeGroup>
+
+```bash cURL
+curl --request POST \
+  --url https://api.example.com/api/motels \
+  --header 'Content-Type: application/json' \
+  --header 'X-User-Username: ana.gomez' \
+  --header 'X-User-Role: <ROLE_ID_PROPERTY_OWNER>' \
+  --data '{
+    "name": "Hotel Las Palmas",
+    "address": "Calle 45 # 12-30",
+    "city": "Medellín",
+    "phoneNumber": "+573001234567",
+    "description": "Comfortable rooms near the city center.",
+    "imageUrls": [
+      "https://cdn.example.com/motels/palmas-front.jpg",
+      "https://cdn.example.com/motels/palmas-room.jpg"
+    ],
+    "latitude": 6.2442,
+    "longitude": -75.5812,
+    "rues": "900123456-1",
+    "rnt": "RNT-2024-00789",
+    "ownerDocumentType": "CC",
+    "ownerDocumentNumber": "1020304050",
+    "ownerFullName": "Ana Gómez Restrepo",
+    "legalRepresentativeName": null,
+    "legalDocumentUrl": "https://cdn.example.com/legal/palmas-docs.pdf"
+  }'
+```
+
+</CodeGroup>
+
+```json 201
+{
+  "id": 101,
+  "name": "Hotel Las Palmas",
+  "address": "Calle 45 # 12-30",
+  "phoneNumber": "+573001234567",
+  "description": "Comfortable rooms near the city center.",
+  "city": "Medellín",
+  "propertyId": 7,
+  "dateCreated": "2026-03-17T10:22:00",
+  "imageUrls": [
+    "https://cdn.example.com/motels/palmas-front.jpg",
+    "https://cdn.example.com/motels/palmas-room.jpg"
+  ],
+  "latitude": 6.2442,
+  "longitude": -75.5812,
+  "approvalStatus": "PENDING",
+  "approvalDate": null,
+  "approvedByUserId": null,
+  "rejectionReason": null,
+  "rues": "900123456-1",
+  "rnt": "RNT-2024-00789",
+  "ownerDocumentType": "CC",
+  "ownerDocumentNumber": "1020304050",
+  "ownerFullName": "Ana Gómez Restrepo",
+  "legalRepresentativeName": null,
+  "legalDocumentUrl": "https://cdn.example.com/legal/palmas-docs.pdf",
+  "hasCompleteLegalInfo": true
+}
+```

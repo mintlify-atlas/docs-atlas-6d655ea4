@@ -1,0 +1,98 @@
+---
+title: "Payment webhook"
+description: "Receive real-time payment notifications from MercadoPago to update payment and reservation status."
+---
+
+MercadoPago calls this endpoint to notify your platform of payment events such as approvals and rejections. You must configure this URL in your MercadoPago developer dashboard so that the platform can automatically update payment records and confirm reservations without any polling.
+
+## Endpoint
+
+```http
+POST /api/payments/webhook
+```
+
+This endpoint is **public** — no authentication headers are required. MercadoPago signs its requests; validate the `x-signature` header in production to reject forged calls.
+
+---
+
+## Configure the webhook URL
+
+1. Log in to your [MercadoPago developer dashboard](https://www.mercadopago.com/developers/panel).
+2. Go to **Your integrations** → select your application.
+3. Navigate to **Webhooks** → **Configure**.
+4. Enter your public webhook URL:
+   ```
+   https://api.example.com/api/payments/webhook
+   ```
+5. Under **Events**, enable the **Payments** topic.
+6. Save and use the **Test** button to send a sample notification.
+
+<Note>
+  The URL must be publicly reachable by MercadoPago's servers. During local development, use a tunneling tool such as ngrok to expose your local port.
+</Note>
+
+---
+
+## Webhook payload
+
+MercadoPago sends a JSON body with the following structure:
+
+<ParamField body="action" type="string">
+  The event action that triggered the notification. Common values:
+  - `payment.created` — a new payment was created in MercadoPago.
+  - `payment.updated` — a payment's status changed (e.g. approved, rejected).
+</ParamField>
+
+<ParamField body="type" type="string">
+  The resource type. The platform only processes notifications where `type` is `"payment"`. All other types are silently ignored.
+</ParamField>
+
+<ParamField body="data" type="object">
+  <Expandable title="data fields">
+    <ParamField body="data.id" type="string">
+      The MercadoPago payment ID. The platform uses this to fetch the full payment details from the MercadoPago API and update the internal record accordingly.
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+**Example payload:**
+
+```json
+{
+  "action": "payment.updated",
+  "type": "payment",
+  "data": {
+    "id": "123456789"
+  }
+}
+```
+
+**Response** — `200 OK` with no body.
+
+---
+
+## What happens after a webhook
+
+When the platform receives a valid webhook with `type: "payment"`, it:
+
+1. Extracts `data.id` (the MercadoPago payment ID).
+2. Fetches the full payment record from MercadoPago's API using the motel's stored access token.
+3. Updates the internal payment record:
+   - Sets `status` to `APPROVED`, `REJECTED`, or `CANCELLED` based on MercadoPago's response.
+   - Stores the `mercadoPagoPaymentId` on the payment record.
+   - Records a `failureReason` if the payment was rejected.
+4. If the payment is `APPROVED`, automatically calls `PATCH /api/reservations/{id}/confirm` to transition the linked reservation from `PENDING` to `CONFIRMED`.
+
+<Warning>
+  If `type` is anything other than `"payment"`, or if `data` is absent, the webhook is acknowledged with `200 OK` but no processing occurs. This prevents errors from non-payment event types such as `merchant_order`.
+</Warning>
+
+---
+
+## Webhook payload reference
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `action` | string | Yes | Event action (`payment.created`, `payment.updated`) |
+| `type` | string | Yes | Resource type — must be `"payment"` to trigger processing |
+| `data.id` | string | Yes (when type is `payment`) | MercadoPago payment ID |

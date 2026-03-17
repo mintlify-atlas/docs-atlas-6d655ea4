@@ -1,0 +1,293 @@
+---
+title: "Admin motel management"
+description: "Administrative endpoints for reviewing, approving, rejecting, and monitoring motels. All require the Admin role."
+---
+
+The admin motel endpoints give administrators full visibility into every motel in the system and control over the approval lifecycle.
+
+<Warning>
+  Every endpoint on this page requires the **Admin** role. Requests from any other role receive `403 Forbidden`. Unauthenticated requests receive `401 Unauthorized`.
+</Warning>
+
+### Required headers (set by the gateway)
+
+All endpoints on this page read the following headers, which the API gateway injects from the verified JWT:
+
+<ParamField header="X-User-Role" type="string" required>
+  Role ID of the caller. Must match the configured `ROLE_ID_ADMIN` value.
+</ParamField>
+
+<ParamField header="X-User-Username" type="string" required>
+  Username of the authenticated admin.
+</ParamField>
+
+<ParamField header="X-User-Id" type="string" required>
+  Numeric user ID of the authenticated admin. Used to record which admin performed approval actions.
+</ParamField>
+
+---
+
+## Approval status values
+
+Every motel carries an `approvalStatus` field that moves through the following states:
+
+| Value | Meaning |
+|-------|---------|
+| `PENDING` | Newly submitted; awaiting admin review. |
+| `UNDER_REVIEW` | An admin has started reviewing the motel. |
+| `APPROVED` | The motel has been approved and is active. |
+| `REJECTED` | The motel was rejected. A `rejectionReason` is recorded. |
+
+New motels always start in `PENDING`. Admins advance the state using the approve, reject, and review endpoints below.
+
+---
+
+## Query endpoints
+
+### GET /api/admin/motels
+
+Returns all motels, with an optional filter by approval status.
+
+<ParamField query="status" type="string">
+  Filter results by approval status. Accepted values: `PENDING`, `UNDER_REVIEW`, `APPROVED`, `REJECTED`. Omit to return all motels regardless of status.
+</ParamField>
+
+**Response** — `200 OK`, array of [MotelResponse](/api/motels/list#motelresponse-fields)
+
+**Error responses**
+
+| Status | Cause |
+|--------|-----------|
+| `400 Bad Request` | The `status` query parameter contains an unrecognised value. |
+
+```bash
+GET /api/admin/motels?status=PENDING
+```
+
+---
+
+### GET /api/admin/motels/pending
+
+Convenience shortcut that returns all motels currently in `PENDING` or `UNDER_REVIEW` status — that is, all motels that still require an admin decision.
+
+**Response** — `200 OK`, array of [MotelResponse](/api/motels/list#motelresponse-fields)
+
+```bash
+GET /api/admin/motels/pending
+```
+
+---
+
+### GET /api/admin/motels/{id}
+
+Returns the full detail of a single motel, regardless of its approval status.
+
+<ParamField path="id" type="number" required>
+  Numeric ID of the motel.
+</ParamField>
+
+**Response** — `200 OK`, single [MotelResponse](/api/motels/list#motelresponse-fields)
+
+```bash
+GET /api/admin/motels/42
+```
+
+---
+
+### GET /api/admin/motels/statistics
+
+Returns aggregate counts of motels grouped by approval status, plus a count of motels that are missing required legal information.
+
+**Response** — `200 OK`, [ApprovalStatisticsResponse](#approvalstatisticsresponse-fields)
+
+```bash
+GET /api/admin/motels/statistics
+```
+
+---
+
+## Approval action endpoints
+
+### POST /api/admin/motels/{id}/approve
+
+Approves a motel, setting its `approvalStatus` to `APPROVED` and recording the admin's user ID and the current timestamp.
+
+<ParamField path="id" type="number" required>
+  Numeric ID of the motel to approve.
+</ParamField>
+
+**Request body** — optional
+
+<ParamField body="comments" type="string">
+  Optional admin comments about the approval. Maximum 500 characters.
+</ParamField>
+
+**Legal information requirement**
+
+Approval requires `hasCompleteLegalInfo()` to be `true` for the motel. A motel satisfies this check when all five of the following fields are present and non-blank:
+
+- `rues`
+- `rnt`
+- `ownerDocumentType`
+- `ownerDocumentNumber`
+- `ownerFullName`
+
+If any of these fields are missing, the endpoint returns `422 Unprocessable Entity`. The property owner must update the motel with complete legal information before approval can proceed.
+
+**Response** — `200 OK`, [ApprovalOperationResponse](#approvaloperationresponse-fields)
+
+**Error responses**
+
+| Status | Cause |
+|--------|-----------|
+| `409 Conflict` | The motel is already `APPROVED`. |
+| `422 Unprocessable Entity` | The motel's legal information is incomplete. |
+
+<CodeGroup>
+
+```bash cURL
+curl --request POST \
+  --url https://api.example.com/api/admin/motels/42/approve \
+  --header 'Content-Type: application/json' \
+  --header 'X-User-Role: <ROLE_ID_ADMIN>' \
+  --header 'X-User-Username: admin.user' \
+  --header 'X-User-Id: 1' \
+  --data '{"comments": "All documentation verified."}'
+```
+
+</CodeGroup>
+
+---
+
+### POST /api/admin/motels/{id}/reject
+
+Rejects a motel, setting its `approvalStatus` to `REJECTED` and storing the provided reason.
+
+<ParamField path="id" type="number" required>
+  Numeric ID of the motel to reject.
+</ParamField>
+
+**Request body** — required
+
+<ParamField body="reason" type="string" required>
+  Explanation of why the motel is being rejected. Must be between 10 and 1000 characters.
+</ParamField>
+
+**Response** — `200 OK`, [ApprovalOperationResponse](#approvaloperationresponse-fields)
+
+**Error responses**
+
+| Status | Cause |
+|--------|-----------|
+| `400 Bad Request` | `reason` is absent, blank, or does not meet the length constraints. |
+| `409 Conflict` | The motel is already `REJECTED`. |
+
+<CodeGroup>
+
+```bash cURL
+curl --request POST \
+  --url https://api.example.com/api/admin/motels/42/reject \
+  --header 'Content-Type: application/json' \
+  --header 'X-User-Role: <ROLE_ID_ADMIN>' \
+  --header 'X-User-Username: admin.user' \
+  --header 'X-User-Id: 1' \
+  --data '{"reason": "RNT certificate is expired. Please renew and resubmit."}'
+```
+
+</CodeGroup>
+
+---
+
+### PATCH /api/admin/motels/{id}/review
+
+Moves a motel into `UNDER_REVIEW` status, indicating that an admin has begun reviewing it. No request body is required.
+
+<ParamField path="id" type="number" required>
+  Numeric ID of the motel to place under review.
+</ParamField>
+
+**Response** — `200 OK`, [ApprovalOperationResponse](#approvaloperationresponse-fields)
+
+**Error responses**
+
+| Status | Cause |
+|--------|-----------|
+| `409 Conflict` | The motel is already `UNDER_REVIEW`. |
+
+<CodeGroup>
+
+```bash cURL
+curl --request PATCH \
+  --url https://api.example.com/api/admin/motels/42/review \
+  --header 'X-User-Role: <ROLE_ID_ADMIN>' \
+  --header 'X-User-Username: admin.user' \
+  --header 'X-User-Id: 1'
+```
+
+</CodeGroup>
+
+---
+
+## Response schemas
+
+### ApprovalOperationResponse fields
+
+Returned by the approve, reject, and review endpoints.
+
+<ResponseField name="motelId" type="number">
+  ID of the motel that was acted upon.
+</ResponseField>
+
+<ResponseField name="motelName" type="string">
+  Display name of the motel.
+</ResponseField>
+
+<ResponseField name="previousStatus" type="string">
+  The motel's `approvalStatus` before this operation.
+</ResponseField>
+
+<ResponseField name="newStatus" type="string">
+  The motel's `approvalStatus` after this operation.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Human-readable summary of the operation (e.g., `"Motel aprobado exitosamente"`).
+</ResponseField>
+
+<ResponseField name="operationDate" type="string">
+  ISO-8601 timestamp of when the operation was performed.
+</ResponseField>
+
+<ResponseField name="performedByUserId" type="number">
+  User ID of the admin who performed the operation.
+</ResponseField>
+
+---
+
+### ApprovalStatisticsResponse fields
+
+Returned by `GET /api/admin/motels/statistics`.
+
+<ResponseField name="totalMotels" type="number">
+  Total number of motel records in the system.
+</ResponseField>
+
+<ResponseField name="pendingApproval" type="number">
+  Number of motels in `PENDING` status.
+</ResponseField>
+
+<ResponseField name="underReview" type="number">
+  Number of motels in `UNDER_REVIEW` status.
+</ResponseField>
+
+<ResponseField name="approved" type="number">
+  Number of motels in `APPROVED` status.
+</ResponseField>
+
+<ResponseField name="rejected" type="number">
+  Number of motels in `REJECTED` status.
+</ResponseField>
+
+<ResponseField name="withIncompleteLegalInfo" type="number">
+  Number of motels where `hasCompleteLegalInfo()` returns `false`. These motels cannot be approved until the property owner supplies the missing legal data.
+</ResponseField>

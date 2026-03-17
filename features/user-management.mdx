@@ -1,0 +1,211 @@
+---
+title: "User management"
+description: "Register accounts, authenticate with JWT, manage profiles, and reset passwords in the Ubik user management service."
+---
+
+The user management microservice runs on its own Spring WebFlux application and handles everything related to identity: registration, login, JWT issuance, profile updates, and password resets. All endpoints are under the `/api/auth` and `/api/user` prefixes.
+
+## Role system
+
+Ubik uses three roles, each identified by a numeric ID that is stored in the environment and read at startup:
+
+| Role | Environment variable | Capabilities |
+|------|---------------------|--------------|
+| Admin | `ROLE_ID_ADMIN` | Full platform access, motel approval, all admin endpoints |
+| Property Owner | `ROLE_ID_PROPERTY_OWNER` | Create and manage their own motel listings |
+| User | `ROLE_ID_USER` | Browse listings and make reservations |
+
+The `roleId` you supply during registration determines which role is assigned to the new account. Property owners and users self-select their role at sign-up time; admin accounts are created out-of-band.
+
+<Note>
+Role IDs are numeric database identifiers injected via environment variables, not string names like `ROLE_ADMIN`. Consult your deployment configuration to find the correct values.
+</Note>
+
+## Registration
+
+Send a `POST` to `/api/auth/register` with a JSON body that matches the `RegisterRequest` record.
+
+### RegisterRequest fields
+
+| Field | Type | Constraints | Notes |
+|-------|------|-------------|-------|
+| `username` | `String` | 3–50 characters, required | Unique across the platform |
+| `password` | `String` | Minimum 8 characters, required | Stored as a bcrypt hash |
+| `email` | `String` | Valid email format, required | Used for password reset emails |
+| `phoneNumber` | `String` | Max 20 characters, optional | Contact phone number |
+| `anonymous` | `Boolean` | Required | Set `true` to hide identity from other users |
+| `roleId` | `Long` | Required | Numeric role identifier (see role table above) |
+| `longitude` | `BigDecimal` | –180 to 180, optional | User's approximate location |
+| `latitude` | `BigDecimal` | –90 to 90, optional | User's approximate location |
+| `birthDate` | `LocalDate` | Must be in the past, optional | Format: `YYYY-MM-DD` |
+
+<Tabs>
+  <Tab title="Register as a regular user">
+    ```bash
+    curl -X POST https://your-gateway/api/auth/register \
+      -H "Content-Type: application/json" \
+      -d '{
+        "username": "maria_garcia",
+        "password": "SecurePass1",
+        "email": "maria@example.com",
+        "phoneNumber": "+573001234567",
+        "anonymous": false,
+        "roleId": 3,
+        "birthDate": "1995-06-15"
+      }'
+    ```
+  </Tab>
+  <Tab title="Register as a property owner">
+    ```bash
+    curl -X POST https://your-gateway/api/auth/register \
+      -H "Content-Type: application/json" \
+      -d '{
+        "username": "hotel_bogota",
+        "password": "SecurePass1",
+        "email": "owner@hotelbogota.co",
+        "phoneNumber": "+5716012345",
+        "anonymous": false,
+        "roleId": 2,
+        "longitude": -74.0817,
+        "latitude": 4.6097
+      }'
+    ```
+  </Tab>
+</Tabs>
+
+A successful registration returns `HTTP 201` with a plain-text confirmation message.
+
+## Login
+
+Send a `POST` to `/api/auth/login` to receive a JWT token.
+
+### LoginRequest fields
+
+| Field | Type | Constraints |
+|-------|------|-------------|
+| `username` | `String` | Required, not blank |
+| `password` | `String` | Required, not blank |
+
+```bash
+curl -X POST https://your-gateway/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "username": "maria_garcia",
+    "password": "SecurePass1"
+  }'
+```
+
+The response body is the raw JWT string:
+
+```
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJtYXJpYV9nYXJjaWEiLCJyb2xlSWQiOiIzIiwiaWQiOiI0MiIsImlhdCI6MTcxMDAwMDAwMCwiZXhwIjoxNzEwMDg2NDAwfQ.signature
+```
+
+## Using JWT tokens in API requests
+
+The API gateway validates every incoming JWT, extracts its claims, and forwards three headers to downstream microservices:
+
+| Header | Content | Example |
+|--------|---------|----------|
+| `X-User-Username` | Authenticated username | `maria_garcia` |
+| `X-User-Role` | Numeric role ID string | `3` |
+| `X-User-Id` | Numeric user ID string | `42` |
+
+You only need to pass the `Authorization` header to the gateway; the downstream headers are added automatically.
+
+```bash
+curl https://your-gateway/api/user \
+  -H "Authorization: Bearer eyJhbGci..."
+```
+
+<Warning>
+Never send `X-User-Username`, `X-User-Role`, or `X-User-Id` directly to a microservice endpoint in production. These headers are injected by the gateway after validating the JWT and cannot be trusted if they come from outside.
+</Warning>
+
+## Password reset flow
+
+<Steps>
+  <Step title="Request a reset token">
+    Send the user's email address as a query parameter. The service generates a short-lived reset token and emails it to the address on file.
+
+    ```bash
+    curl -X POST "https://your-gateway/api/auth/reset-password-request?email=maria@example.com"
+    ```
+  </Step>
+  <Step title="Check your email">
+    The notification service sends an HTML email containing the reset token. The token is stored on the `User` domain entity in the `resetToken` field alongside a `resetTokenExpiry` timestamp.
+  </Step>
+  <Step title="Submit the new password">
+    Send the token and a new password to complete the reset.
+
+    ```bash
+    curl -X POST https://your-gateway/api/auth/reset-password \
+      -H "Content-Type: application/json" \
+      -d '{
+        "token": "abc123resettoken",
+        "newPassword": "NewSecurePass2"
+      }'
+    ```
+
+    The `ResetPasswordRequest` record requires both `token` and `newPassword` to be non-blank. The service validates that the token matches the stored value and has not expired, then replaces the password hash.
+  </Step>
+</Steps>
+
+## Profile management
+
+All profile endpoints require a valid JWT. The gateway injects the `X-User-Username` header, which the service uses to look up the account — no user ID is required in the path for the authenticated user's own profile.
+
+### View your profile
+
+```bash
+curl https://your-gateway/api/user \
+  -H "Authorization: Bearer eyJhbGci..."
+```
+
+### View another user's profile by ID
+
+```bash
+curl https://your-gateway/api/user/42 \
+  -H "Authorization: Bearer eyJhbGci..."
+```
+
+### Update your profile
+
+```bash
+curl -X PUT https://your-gateway/api/user \
+  -H "Authorization: Bearer eyJhbGci..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "new_email@example.com",
+    "phoneNumber": "+573009876543"
+  }'
+```
+
+### Delete your account
+
+```bash
+curl -X DELETE https://your-gateway/api/user \
+  -H "Authorization: Bearer eyJhbGci..."
+```
+
+A successful deletion returns `HTTP 204 No Content`.
+
+## User domain model
+
+The `User` record is the core domain entity and includes built-in coordinate validation:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `Long` | Auto-generated primary key |
+| `username` | `String` | Unique login identifier |
+| `password` | `String` | bcrypt-hashed password |
+| `email` | `String` | Contact and reset-token email |
+| `phoneNumber` | `String` | Optional phone number |
+| `createdAt` | `LocalDateTime` | Account creation timestamp |
+| `anonymous` | `boolean` | Whether the identity is hidden from other users |
+| `roleId` | `Long` | Numeric role assignment |
+| `resetToken` | `String` | Active password reset token (nullable) |
+| `resetTokenExpiry` | `LocalDateTime` | Expiry for the reset token (nullable) |
+| `longitude` | `BigDecimal` | –180 to 180 (validated in constructor) |
+| `latitude` | `BigDecimal` | –90 to 90 (validated in constructor) |
+| `birthDate` | `LocalDate` | Must be in the past (validated in constructor) |

@@ -1,0 +1,251 @@
+---
+title: "Services"
+description: "Manage motel amenities and offerings that can be linked to rooms."
+---
+
+Services are the amenities and offerings a motel provides — think Wi-Fi, parking, breakfast, or a pool. Each service exists independently and can be linked to one or many rooms. Read operations are public; write operations and room-association management require authentication.
+
+## Endpoints
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/services` | Public | List all services |
+| `GET` | `/api/services/{id}` | Public | Get a service by ID |
+| `GET` | `/api/services/name/{name}` | Public | Get a service by name |
+| `GET` | `/api/services/room/{roomId}` | Public | List service IDs for a room |
+| `POST` | `/api/services` | Required | Create a service |
+| `PUT` | `/api/services/{id}` | Required | Update a service |
+| `DELETE` | `/api/services/{id}` | Required | Delete a service |
+| `POST` | `/api/services/room/{roomId}/service/{serviceId}` | Required | Add a service to a room |
+| `DELETE` | `/api/services/room/{roomId}/service/{serviceId}` | Required | Remove a service from a room |
+
+---
+
+## List all services
+
+```http
+GET /api/services
+```
+
+Returns the full catalog of services as a reactive stream.
+
+**Response** — array of [Service objects](#service-object).
+
+---
+
+## Get a service by ID
+
+```http
+GET /api/services/{id}
+```
+
+<ParamField path="id" type="integer" required>
+  The numeric ID of the service.
+</ParamField>
+
+**Response** — a single [Service object](#service-object).
+
+---
+
+## Get a service by name
+
+```http
+GET /api/services/name/{name}
+```
+
+<ParamField path="name" type="string" required>
+  The exact name of the service (case-sensitive).
+</ParamField>
+
+**Response** — a single [Service object](#service-object).
+
+---
+
+## List service IDs for a room
+
+```http
+GET /api/services/room/{roomId}
+```
+
+Returns the IDs of all services linked to the given room. Use these IDs to fetch full service details individually.
+
+<ParamField path="roomId" type="integer" required>
+  The numeric ID of the room.
+</ParamField>
+
+**Response** — array of `integer` service IDs.
+
+---
+
+## Create a service
+
+```http
+POST /api/services
+```
+
+**Required headers**
+
+| Header | Description |
+|--------|-------------|
+| `X-User-Username` | Username of the authenticated user |
+| `X-User-Role` | Role of the authenticated user |
+
+**Request body**
+
+<ParamField body="name" type="string" required>
+  Name of the service, e.g. `"Wi-Fi"`. Maximum 50 characters.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Description of what the service includes. Maximum 255 characters.
+</ParamField>
+
+<ParamField body="icon" type="string">
+  Icon identifier or class name for UI rendering (e.g. `"wifi"`, `"pool"`). Maximum 50 characters.
+</ParamField>
+
+**Response** — `201 Created` with the created [Service object](#service-object).
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://api.example.com/api/services \
+  -H "Content-Type: application/json" \
+  -H "X-User-Username: owner_jane" \
+  -H "X-User-Role: OWNER" \
+  -d '{
+    "name": "Wi-Fi",
+    "description": "High-speed wireless internet throughout the property.",
+    "icon": "wifi"
+  }'
+```
+</CodeGroup>
+
+---
+
+## Update a service
+
+```http
+PUT /api/services/{id}
+```
+
+<ParamField path="id" type="integer" required>
+  The numeric ID of the service to update.
+</ParamField>
+
+**Required headers**
+
+| Header | Description |
+|--------|-------------|
+| `X-User-Username` | Username of the authenticated user |
+
+**Request body**
+
+<ParamField body="name" type="string" required>
+  Updated name. Maximum 50 characters.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Updated description. Maximum 255 characters.
+</ParamField>
+
+<ParamField body="icon" type="string">
+  Updated icon identifier. Maximum 50 characters.
+</ParamField>
+
+**Response** — `200 OK` with the updated [Service object](#service-object).
+
+---
+
+## Delete a service
+
+```http
+DELETE /api/services/{id}
+```
+
+<ParamField path="id" type="integer" required>
+  The numeric ID of the service to delete.
+</ParamField>
+
+**Required headers**
+
+| Header | Description |
+|--------|-------------|
+| `X-User-Username` | Username of the authenticated user |
+
+**Response** — `204 No Content`.
+
+---
+
+## Add a service to a room
+
+```http
+POST /api/services/room/{roomId}/service/{serviceId}
+```
+
+Creates an association between an existing service and a room. Both must already exist.
+
+<ParamField path="roomId" type="integer" required>
+  The numeric ID of the room.
+</ParamField>
+
+<ParamField path="serviceId" type="integer" required>
+  The numeric ID of the service.
+</ParamField>
+
+**Required headers**
+
+| Header | Description |
+|--------|-------------|
+| `X-User-Username` | Username of the authenticated user |
+
+**Response** — `201 Created` with no body.
+
+---
+
+## Remove a service from a room
+
+```http
+DELETE /api/services/room/{roomId}/service/{serviceId}
+```
+
+Removes the association between a service and a room. The service itself is not deleted.
+
+<ParamField path="roomId" type="integer" required>
+  The numeric ID of the room.
+</ParamField>
+
+<ParamField path="serviceId" type="integer" required>
+  The numeric ID of the service to unlink.
+</ParamField>
+
+**Required headers**
+
+| Header | Description |
+|--------|-------------|
+| `X-User-Username` | Username of the authenticated user |
+
+**Response** — `204 No Content`.
+
+---
+
+## Service object
+
+<ResponseField name="id" type="integer">
+  Unique identifier of the service.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Name of the service (e.g. `"Wi-Fi"`, `"Parking"`).
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  Human-readable description of what the service includes.
+</ResponseField>
+
+<ResponseField name="icon" type="string">
+  Icon identifier used to render the service in the UI.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  ISO 8601 timestamp of when the service was created.
+</ResponseField>

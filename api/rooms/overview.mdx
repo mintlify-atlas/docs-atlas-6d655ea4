@@ -1,0 +1,303 @@
+---
+title: "Rooms"
+description: "Manage motel rooms: browse availability, create, update, and delete room listings."
+---
+
+The Rooms API lets you list, inspect, and manage individual rooms within a motel. Read operations are public; write operations require authentication via the `X-User-Username` and `X-User-Role` headers propagated by the API gateway.
+
+## Endpoints
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/rooms` | Public | List all rooms |
+| `GET` | `/api/rooms/{id}` | Public | Get a single room |
+| `GET` | `/api/rooms/motel/{motelId}` | Public | List rooms for a motel |
+| `GET` | `/api/rooms/motel/{motelId}/available` | Public | List available rooms for a motel |
+| `POST` | `/api/rooms` | Required | Create a room |
+| `PUT` | `/api/rooms/{id}` | Required | Update a room |
+| `DELETE` | `/api/rooms/{id}` | Required | Delete a room |
+
+---
+
+## List all rooms
+
+```http
+GET /api/rooms
+```
+
+Returns all rooms across all motels as a reactive stream.
+
+**Response** — array of [Room objects](#room-object)
+
+---
+
+## Get a room by ID
+
+```http
+GET /api/rooms/{id}
+```
+
+<ParamField path="id" type="integer" required>
+  The numeric ID of the room.
+</ParamField>
+
+**Response** — a single [Room object](#room-object).
+
+---
+
+## List rooms by motel
+
+```http
+GET /api/rooms/motel/{motelId}
+```
+
+<ParamField path="motelId" type="integer" required>
+  The numeric ID of the motel.
+</ParamField>
+
+**Response** — array of [Room objects](#room-object) belonging to the motel.
+
+---
+
+## List available rooms by motel
+
+```http
+GET /api/rooms/motel/{motelId}/available
+```
+
+Returns only rooms whose `isAvailable` flag is `true` — i.e., rooms that have no active reservation blocking them.
+
+<ParamField path="motelId" type="integer" required>
+  The numeric ID of the motel.
+</ParamField>
+
+**Response** — array of [Room objects](#room-object) with `isAvailable: true`.
+
+<Note>
+  A room's `isAvailable` flag is checked against active reservations before deletion. You cannot delete a room that has active (non-cancelled, non-checked-out) reservations.
+</Note>
+
+---
+
+## Create a room
+
+```http
+POST /api/rooms
+```
+
+Requires the authenticated user to be a **Property Owner** or **Admin**. The API gateway forwards identity via headers.
+
+**Required headers**
+
+| Header | Description |
+|--------|-------------|
+| `X-User-Username` | Username of the authenticated user |
+| `X-User-Role` | Role of the authenticated user (`OWNER` or `ADMIN`) |
+
+**Request body**
+
+<ParamField body="motelId" type="integer" required>
+  ID of the motel this room belongs to.
+</ParamField>
+
+<ParamField body="number" type="string" required>
+  Room identifier or number, e.g. `"101"`. Maximum 20 characters.
+</ParamField>
+
+<ParamField body="roomType" type="string" required>
+  Category of the room, e.g. `"Suite"` or `"Standard"`. Maximum 50 characters.
+</ParamField>
+
+<ParamField body="price" type="number" required>
+  Price per night. Must be greater than zero.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Free-text description of the room. Maximum 500 characters.
+</ParamField>
+
+<ParamField body="imageUrls" type="array">
+  List of image URLs. Maximum 15 items; each URL up to 500 characters.
+</ParamField>
+
+<ParamField body="latitude" type="number">
+  Geographic latitude of the room/property. Must be between `-90.0` and `90.0`.
+</ParamField>
+
+<ParamField body="longitude" type="number">
+  Geographic longitude of the room/property. Must be between `-180.0` and `180.0`.
+</ParamField>
+
+<ParamField body="serviceIds" type="array">
+  List of service IDs to associate with this room on creation.
+</ParamField>
+
+**Response** — `201 Created` with the created [Room object](#room-object).
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://api.example.com/api/rooms \
+  -H "Content-Type: application/json" \
+  -H "X-User-Username: owner_jane" \
+  -H "X-User-Role: OWNER" \
+  -d '{
+    "motelId": 1,
+    "number": "201",
+    "roomType": "Suite",
+    "price": 150000,
+    "description": "Spacious suite with jacuzzi.",
+    "imageUrls": ["https://cdn.example.com/rooms/201-a.jpg"],
+    "latitude": 4.7109,
+    "longitude": -74.0721,
+    "serviceIds": [1, 3]
+  }'
+```
+</CodeGroup>
+
+---
+
+## Update a room
+
+```http
+PUT /api/rooms/{id}
+```
+
+Replaces all mutable fields of an existing room. Requires authentication.
+
+<ParamField path="id" type="integer" required>
+  The numeric ID of the room to update.
+</ParamField>
+
+**Required headers**
+
+| Header | Description |
+|--------|-------------|
+| `X-User-Username` | Username of the authenticated user |
+
+**Request body** — same shape as [Create a room](#create-a-room) minus `motelId`, plus:
+
+<ParamField body="number" type="string" required>
+  Updated room identifier. Maximum 20 characters.
+</ParamField>
+
+<ParamField body="roomType" type="string" required>
+  Updated room type. Maximum 50 characters.
+</ParamField>
+
+<ParamField body="price" type="number" required>
+  Updated price per night. Must be greater than zero.
+</ParamField>
+
+<ParamField body="isAvailable" type="boolean" required>
+  Whether the room is currently available for new reservations.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Updated description. Maximum 500 characters.
+</ParamField>
+
+<ParamField body="imageUrls" type="array">
+  Updated list of image URLs. Maximum 15 items.
+</ParamField>
+
+<ParamField body="latitude" type="number">
+  Updated latitude between `-90.0` and `90.0`.
+</ParamField>
+
+<ParamField body="longitude" type="number">
+  Updated longitude between `-180.0` and `180.0`.
+</ParamField>
+
+<ParamField body="serviceIds" type="array">
+  Updated list of associated service IDs.
+</ParamField>
+
+**Response** — `200 OK` with the updated [Room object](#room-object).
+
+---
+
+## Delete a room
+
+```http
+DELETE /api/rooms/{id}
+```
+
+<Warning>
+  Deletion is blocked if the room has active reservations (status `PENDING`, `CONFIRMED`, or `CHECKED_IN`). Cancel or complete those reservations first.
+</Warning>
+
+<ParamField path="id" type="integer" required>
+  The numeric ID of the room to delete.
+</ParamField>
+
+**Required headers**
+
+| Header | Description |
+|--------|-------------|
+| `X-User-Username` | Username of the authenticated user |
+
+**Response** — `204 No Content`.
+
+---
+
+## Room object
+
+<ResponseField name="id" type="integer">
+  Unique identifier of the room.
+</ResponseField>
+
+<ResponseField name="motelId" type="integer">
+  ID of the motel the room belongs to.
+</ResponseField>
+
+<ResponseField name="number" type="string">
+  Room identifier (e.g. `"201"`).
+</ResponseField>
+
+<ResponseField name="roomType" type="string">
+  Category of the room (e.g. `"Suite"`, `"Standard"`).
+</ResponseField>
+
+<ResponseField name="price" type="number">
+  Price per night.
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  Free-text description.
+</ResponseField>
+
+<ResponseField name="isAvailable" type="boolean">
+  Whether the room is currently available for reservations.
+</ResponseField>
+
+<ResponseField name="imageUrls" type="array">
+  List of image URLs for the room.
+</ResponseField>
+
+<ResponseField name="latitude" type="number">
+  Geographic latitude of the property.
+</ResponseField>
+
+<ResponseField name="longitude" type="number">
+  Geographic longitude of the property.
+</ResponseField>
+
+<ResponseField name="motelName" type="string">
+  Denormalized name of the parent motel.
+</ResponseField>
+
+<ResponseField name="motelAddress" type="string">
+  Denormalized address of the parent motel.
+</ResponseField>
+
+<ResponseField name="motelCity" type="string">
+  Denormalized city of the parent motel.
+</ResponseField>
+
+<ResponseField name="motelPhoneNumber" type="string">
+  Denormalized phone number of the parent motel.
+</ResponseField>
+
+<ResponseField name="serviceIds" type="array">
+  IDs of the services associated with this room.
+</ResponseField>

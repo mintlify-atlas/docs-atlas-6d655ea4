@@ -1,0 +1,99 @@
+---
+title: "Register"
+description: "Create a new user account and receive a JWT access token."
+---
+
+`POST /api/auth/register`
+
+Creates a new user account. On success, the server saves the user, sends a welcome email, and returns a signed JWT token you can use to authenticate subsequent requests.
+
+<Note>
+  The returned token encodes the user's `username` and `roleId`. Store it securely and include it in the `Authorization` header for protected endpoints.
+</Note>
+
+## Request body
+
+<ParamField body="username" type="string" required>
+  Unique display name for the user. Must be between 3 and 50 characters.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  Account password. Must be at least 8 characters.
+</ParamField>
+
+<ParamField body="email" type="string" required>
+  Valid email address for the account. Must be unique across all users.
+</ParamField>
+
+<ParamField body="anonymous" type="boolean" required>
+  Whether the account operates anonymously. Pass `false` for standard named accounts.
+</ParamField>
+
+<ParamField body="roleId" type="number" required>
+  Numeric ID of the role to assign to the user (e.g., `1` for admin, `2` for staff). Accepts a numeric value or a numeric string.
+</ParamField>
+
+<ParamField body="phoneNumber" type="string">
+  Contact phone number. Maximum 20 characters. Optional.
+</ParamField>
+
+<ParamField body="longitude" type="number">
+  Geographic longitude of the user's location. Must be between `-180.0` and `180.0`. Optional.
+</ParamField>
+
+<ParamField body="latitude" type="number">
+  Geographic latitude of the user's location. Must be between `-90.0` and `90.0`. Optional.
+</ParamField>
+
+<ParamField body="birthDate" type="string">
+  User's date of birth in `YYYY-MM-DD` format. Must be a date in the past. Optional.
+</ParamField>
+
+## Response
+
+### 201 Created
+
+Returns a plain JWT token string.
+
+<ResponseField name="(body)" type="string" required>
+  A signed JWT token. Use this value as `Bearer <token>` in the `Authorization` header.
+</ResponseField>
+
+```json 201
+"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqZG9lIiwicm9sZUlkIjoyLCJpYXQiOjE3MTA2OTkwMDB9.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+```
+
+### Error responses
+
+| Status | Cause |
+|--------|-------|
+| `400 Bad Request` | A required field is missing or fails validation (e.g., username too short, invalid email format, password under 8 characters). |
+| `400 Bad Request` | The `username` is already registered. |
+| `400 Bad Request` | The `email` is already registered. |
+
+<Warning>
+  Both duplicate `username` and duplicate `email` return `400`. The response body contains an `"Error"` prefix followed by the exception message (e.g., `"ErrorUsername already exists"`).
+</Warning>
+
+## Example
+
+<CodeGroup>
+
+```bash cURL
+curl --request POST \
+  --url https://api.example.com/api/auth/register \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "username": "jdoe",
+    "password": "s3cur3P@ss",
+    "email": "jdoe@example.com",
+    "phoneNumber": "+1-555-0100",
+    "anonymous": false,
+    "roleId": 2,
+    "longitude": -73.935242,
+    "latitude": 40.730610,
+    "birthDate": "1990-06-15"
+  }'
+```
+
+</CodeGroup>

@@ -1,0 +1,350 @@
+---
+title: "Docker deployment"
+description: "Deploy all five Ubik Backend microservices locally or on any Linux host using Docker Compose."
+---
+
+Ubik Backend ships as a Docker Compose stack of five services. A single `docker compose up --build` command builds every service image from source and starts them in the correct dependency order.
+
+All commands below must be run from the `microservicios/microreactivo/` directory, which is where `docker-compose.yml` lives.
+
+## Services overview
+
+The stack defines five services, all connected through a shared bridge network called `ubik-network`.
+
+| Service | Container name | Port | Description |
+|---------|---------------|------|-------------|
+| `usermanagement-service` | `usermanagement-service` | 8081 | Handles registration, login, JWT issuance, and user profiles |
+| `motel-management-service` | `motel-management-service` | 8083 | Manages motels, rooms, services, and reservations |
+| `notification-service` | `notification-service` | 8084 | Sends transactional email via Gmail SMTP |
+| `payment-service` | `payment-service` | 8085 | MercadoPago marketplace integration and payment processing |
+| `gateway` | `gateway` | 8080 | Spring Cloud Gateway — the single public entry point for all API traffic |
+
+## Build contexts and Dockerfiles
+
+Every service uses a two-stage Dockerfile: a Maven build stage on `maven:3.9.6-eclipse-temurin-17-alpine` that compiles only the target module, followed by a lean JRE runtime stage on `eclipse-temurin:17-jre-alpine`. A non-root `spring` user runs the JAR in the runtime stage.
+
+All Dockerfiles share the same build context (the repository root `microservicios/microreactivo/`) so that the parent POM is available to Maven during the `-pl <module> -am` build.
+
+| Service | Dockerfile path | Build command inside image |
+|---------|----------------|---------------------------|
+| Gateway | `gateway/Dockerfile` | `mvn clean package -pl gateway -am -DskipTests` |
+| User Management | `userManagement/Dockerfile` | `mvn clean package -pl userManagement -am -DskipTests` |
+| Motel Management | `motelManegement/Dockerfile` | `mvn clean package -pl motelManegement -am -DskipTests` |
+| Notification Service | `notificationService/Dockerfile` | `mvn clean package -pl notificationService -am -DskipTests` |
+| Payment Service | `paymentService/Dockerfile` | `mvn clean package -pl paymentService -am -DskipTests` |
+
+## Startup dependency order
+
+Docker Compose enforces a strict startup order using `depends_on` with `condition: service_healthy`. A service only starts after its dependencies pass their health checks.
+
+```
+usermanagement-service  ──┐
+motel-management-service ──┼──► gateway
+notification-service    ──┘
+
+motel-management-service ──┐
+notification-service    ──┴──► payment-service
+```
+
+The gateway waits for `usermanagement-service`, `motel-management-service`, and `notification-service` to all be healthy before it starts. The payment service waits for `motel-management-service` and `notification-service`.
+
+## Health check configuration
+
+Each service exposes a Spring Boot Actuator health endpoint that Docker uses as the health probe. The probe runs `wget --spider` against `/actuator/health`.
+
+<AccordionGroup>
+  <Accordion title="Gateway (port 8080)">
+
+  ```yaml
+  healthcheck:
+    test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/actuator/health"]
+    interval: 30s
+    timeout: 10s
+    retries: 5
+    start_period: 90s
+  ```
+
+  <Note>
+    The gateway has a 90-second `start_period` — longer than other services — because it only starts after all upstream services are healthy, and Spring Cloud Gateway requires extra time to initialize its route definitions and JWT security filter.
+  </Note>
+
+  </Accordion>
+  <Accordion title="User Management (port 8081)">
+
+  ```yaml
+  healthcheck:
+    test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8081/actuator/health"]
+    interval: 30s
+    timeout: 10s
+    retries: 5
+    start_period: 60s
+  ```
+
+  </Accordion>
+  <Accordion title="Motel Management (port 8083)">
+
+  ```yaml
+  healthcheck:
+    test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8083/actuator/health"]
+    interval: 30s
+    timeout: 10s
+    retries: 5
+    start_period: 60s
+  ```
+
+  </Accordion>
+  <Accordion title="Notification Service (port 8084)">
+
+  ```yaml
+  healthcheck:
+    test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8084/actuator/health"]
+    interval: 30s
+    timeout: 10s
+    retries: 5
+    start_period: 40s
+  ```
+
+  </Accordion>
+  <Accordion title="Payment Service (port 8085)">
+
+  ```yaml
+  healthcheck:
+    test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8085/actuator/health"]
+    interval: 30s
+    timeout: 10s
+    retries: 5
+    start_period: 60s
+  ```
+
+  </Accordion>
+</AccordionGroup>
+
+## The ubik-network bridge network
+
+All five containers join a custom bridge network named `ubik-network`. This lets services reach each other by container name as the DNS hostname (for example, `http://motel-management-service:8083`) without exposing those ports externally.
+
+```yaml
+networks:
+  ubik-network:
+    driver: bridge
+    name: ubik-network
+```
+
+Only the ports explicitly listed under `ports:` in each service definition are reachable from the host machine.
+
+## Full docker-compose.yml
+
+```yaml
+version: '3.8'
+
+services:
+  usermanagement-service:
+    build:
+      context: .
+      dockerfile: userManagement/Dockerfile
+    container_name: usermanagement-service
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_R2DBC_URL: ${SPRING_R2DBC_URL}
+      SPRING_R2DBC_USERNAME: ${SPRING_R2DBC_USERNAME}
+      SPRING_R2DBC_PASSWORD: ${SPRING_R2DBC_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRATION: ${JWT_EXPIRATION:-86400000}
+      JAVA_OPTS: "-Xmx512m -Xms256m"
+    networks:
+      - ubik-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8081/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  motel-management-service:
+    build:
+      context: .
+      dockerfile: motelManegement/Dockerfile
+    container_name: motel-management-service
+    restart: unless-stopped
+    ports:
+      - "8083:8083"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_R2DBC_URL: ${SPRING_R2DBC_URL}
+      SPRING_R2DBC_USERNAME: ${SPRING_R2DBC_USERNAME}
+      SPRING_R2DBC_PASSWORD: ${SPRING_R2DBC_PASSWORD}
+      CLOUDINARY_CLOUD_NAME: ${CLOUDINARY_CLOUD_NAME}
+      CLOUDINARY_API_KEY: ${CLOUDINARY_API_KEY}
+      CLOUDINARY_API_SECRET: ${CLOUDINARY_API_SECRET}
+      ROLE_ID_ADMIN: ${ROLE_ID_ADMIN}
+      ROLE_ID_PROPERTY_OWNER: ${ROLE_ID_PROPERTY_OWNER}
+      ROLE_ID_USER: ${ROLE_ID_USER}
+      JAVA_OPTS: "-Xmx512m -Xms256m"
+    networks:
+      - ubik-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8083/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  notification-service:
+    build:
+      context: .
+      dockerfile: notificationService/Dockerfile
+    container_name: notification-service
+    restart: unless-stopped
+    ports:
+      - "8084:8084"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      MAIL_USERNAME: ${MAIL_USERNAME}
+      MAIL_PASSWORD: ${MAIL_PASSWORD}
+      JAVA_OPTS: "-Xmx512m -Xms256m"
+    networks:
+      - ubik-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8084/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+
+  payment-service:
+    build:
+      context: .
+      dockerfile: paymentService/Dockerfile
+    container_name: payment-service
+    restart: unless-stopped
+    ports:
+      - "8085:8085"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      SPRING_R2DBC_URL: ${SPRING_R2DBC_URL}
+      SPRING_R2DBC_USERNAME: ${SPRING_R2DBC_USERNAME}
+      SPRING_R2DBC_PASSWORD: ${SPRING_R2DBC_PASSWORD}
+      MERCADOPAGO_ACCESS_TOKEN: ${MERCADOPAGO_ACCESS_TOKEN}
+      MERCADOPAGO_WEBHOOK_SECRET: ${MERCADOPAGO_WEBHOOK_SECRET}
+      MERCADOPAGO_CLIENT_ID: ${MERCADOPAGO_CLIENT_ID}
+      MERCADOPAGO_CLIENT_SECRET: ${MERCADOPAGO_CLIENT_SECRET}
+      MERCADOPAGO_REDIRECT_URI: ${MERCADOPAGO_REDIRECT_URI}
+      MP_FEE_PERCENT: ${MP_FEE_PERCENT:-10}
+      JAVA_OPTS: "-Xmx512m -Xms256m"
+    depends_on:
+      motel-management-service:
+        condition: service_healthy
+      notification-service:
+        condition: service_healthy
+    networks:
+      - ubik-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8085/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  gateway:
+    build:
+      context: .
+      dockerfile: gateway/Dockerfile
+    container_name: gateway
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      SPRING_PROFILES_ACTIVE: docker
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRATION: ${JWT_EXPIRATION:-86400000}
+      ROLE_ID_ADMIN: ${ROLE_ID_ADMIN}
+      ROLE_ID_PROPERTY_OWNER: ${ROLE_ID_PROPERTY_OWNER}
+      ROLE_ID_USER: ${ROLE_ID_USER}
+      JAVA_OPTS: "-Xmx512m -Xms256m"
+    depends_on:
+      usermanagement-service:
+        condition: service_healthy
+      motel-management-service:
+        condition: service_healthy
+      notification-service:
+        condition: service_healthy
+    networks:
+      - ubik-network
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8080/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 90s
+
+networks:
+  ubik-network:
+    driver: bridge
+    name: ubik-network
+```
+
+## Common commands
+
+### Build and start the full stack
+
+```bash
+# Build images and start all services in the foreground
+docker compose up --build
+
+# Build images and start in detached (background) mode
+docker compose up --build -d
+```
+
+### Start without rebuilding
+
+```bash
+docker compose up -d
+```
+
+### Stop the stack
+
+```bash
+# Stop and remove containers, keep images and volumes
+docker compose down
+
+# Stop and remove containers plus orphaned containers from previous runs
+docker compose down --remove-orphans
+```
+
+### View logs
+
+```bash
+# Follow logs from all services
+docker compose logs -f
+
+# Follow logs from a single service
+docker compose logs -f gateway
+docker compose logs -f usermanagement-service
+```
+
+### Check container health status
+
+```bash
+docker compose ps
+```
+
+All five containers show `healthy` in the `STATUS` column once the stack is fully up.
+
+### Rebuild a single service
+
+To rebuild one service without rebuilding the others:
+
+```bash
+# Stop, rebuild, and restart the gateway only
+docker compose up -d --build gateway
+
+# Stop, rebuild, and restart the payment service only
+docker compose up -d --build payment-service
+```
+
+<Tip>
+After rebuilding a single service, run `docker compose ps` to confirm the rebuilt container has transitioned back to `healthy` before sending traffic to it.
+</Tip>

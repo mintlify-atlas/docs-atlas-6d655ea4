@@ -1,0 +1,222 @@
+---
+title: "List motels"
+description: "Retrieve motels by various filters — publicly or as an authenticated property owner."
+---
+
+The motel listing endpoints let anyone browse published motels, and let authenticated property owners retrieve their own listings.
+
+## Public endpoints
+
+No authentication is required for the three read endpoints below. All return a `MotelResponse` object or a stream of them.
+
+---
+
+### GET /api/motels
+
+Returns all motels in the system.
+
+```bash
+GET /api/motels
+```
+
+**Response** — `200 OK`, array of [MotelResponse](#motelresponse-fields)
+
+---
+
+### GET /api/motels/{id}
+
+Returns a single motel by its numeric ID.
+
+<ParamField path="id" type="number" required>
+  Numeric ID of the motel.
+</ParamField>
+
+**Response** — `200 OK`, single [MotelResponse](#motelresponse-fields)
+
+```bash
+GET /api/motels/42
+```
+
+---
+
+### GET /api/motels/city/{city}
+
+Returns all motels located in the given city.
+
+<ParamField path="city" type="string" required>
+  City name to filter by. Case-sensitive.
+</ParamField>
+
+**Response** — `200 OK`, array of [MotelResponse](#motelresponse-fields)
+
+```bash
+GET /api/motels/city/Bogot%C3%A1
+```
+
+---
+
+## Authenticated endpoints
+
+Both endpoints below require a valid JWT. The API gateway propagates the authenticated user's identity through the `X-User-Username`, `X-User-Id`, and `X-User-Role` request headers.
+
+---
+
+### GET /api/auth/motels/my-motels
+
+Returns all motels owned by the currently authenticated user.
+
+The server resolves the caller's numeric user ID from the `X-User-Username` header, then returns every motel whose `property_id` matches that user.
+
+<Note>
+  This is the preferred way for property owners to list their own motels. The legacy endpoint `GET /api/auth/motels/{userId}` is still available but deprecated.
+</Note>
+
+**Required headers (set by the gateway)**
+
+<ParamField header="X-User-Username" type="string" required>
+  Username of the authenticated caller, forwarded by the API gateway from the JWT `sub` claim.
+</ParamField>
+
+**Response** — `200 OK`, array of [MotelResponse](#motelresponse-fields). Returns an empty array when the user has no motels.
+
+**Error responses**
+
+| Status | Cause |
+|--------|-------|
+| `401 Unauthorized` | `X-User-Username` header is absent or blank. |
+| `404 Not Found` | No user record exists for the given username. |
+
+```bash
+GET /api/auth/motels/my-motels
+```
+
+---
+
+### GET /api/auth/motels/{userId}
+
+<Warning>
+  This endpoint is deprecated. Use `GET /api/auth/motels/my-motels` instead. It is kept for backward compatibility only.
+</Warning>
+
+Returns motels belonging to the specified user ID. The authenticated user may only request their own motels; requesting another user's ID returns `403 Forbidden`.
+
+If the gateway does not forward an `X-User-Id` header but does forward `X-User-Username`, the server automatically delegates to the `/my-motels` logic.
+
+<ParamField path="userId" type="number" required>
+  Numeric ID of the property owner.
+</ParamField>
+
+**Required headers (set by the gateway)**
+
+<ParamField header="X-User-Id" type="string" required>
+  Numeric user ID of the authenticated caller.
+</ParamField>
+
+**Response** — `200 OK`, array of [MotelResponse](#motelresponse-fields)
+
+**Error responses**
+
+| Status | Cause |
+|--------|-------|
+| `401 Unauthorized` | Neither `X-User-Id` nor `X-User-Username` header is present. |
+| `403 Forbidden` | The `userId` in the path does not match the authenticated user. |
+
+```bash
+GET /api/auth/motels/7
+```
+
+---
+
+## MotelResponse fields
+
+<ResponseField name="id" type="number">
+  Unique numeric identifier of the motel.
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  Display name of the motel.
+</ResponseField>
+
+<ResponseField name="address" type="string">
+  Street address.
+</ResponseField>
+
+<ResponseField name="phoneNumber" type="string">
+  Contact phone number.
+</ResponseField>
+
+<ResponseField name="description" type="string">
+  Short description of the property.
+</ResponseField>
+
+<ResponseField name="city" type="string">
+  City where the motel is located.
+</ResponseField>
+
+<ResponseField name="propertyId" type="number">
+  User ID of the property owner.
+</ResponseField>
+
+<ResponseField name="dateCreated" type="string">
+  ISO-8601 timestamp of when the motel record was created.
+</ResponseField>
+
+<ResponseField name="imageUrls" type="string[]">
+  List of image URLs for the property. Up to 10 entries.
+</ResponseField>
+
+<ResponseField name="latitude" type="number">
+  Geographic latitude (-90 to 90).
+</ResponseField>
+
+<ResponseField name="longitude" type="number">
+  Geographic longitude (-180 to 180).
+</ResponseField>
+
+<ResponseField name="approvalStatus" type="string">
+  Current approval state. One of `PENDING`, `UNDER_REVIEW`, `APPROVED`, or `REJECTED`.
+</ResponseField>
+
+<ResponseField name="approvalDate" type="string">
+  ISO-8601 timestamp of the last approval or rejection action. `null` if the motel has not yet been reviewed.
+</ResponseField>
+
+<ResponseField name="approvedByUserId" type="number">
+  User ID of the admin who approved or rejected the motel. `null` if not yet reviewed.
+</ResponseField>
+
+<ResponseField name="rejectionReason" type="string">
+  Reason provided when the motel was rejected. `null` for other statuses.
+</ResponseField>
+
+<ResponseField name="rues" type="string">
+  Registro Único Empresarial y Social (RUES) number.
+</ResponseField>
+
+<ResponseField name="rnt" type="string">
+  Registro Nacional de Turismo (RNT) number.
+</ResponseField>
+
+<ResponseField name="ownerDocumentType" type="string">
+  Type of the owner's identity document. One of `CC`, `NIT`, `CE`, or `PASAPORTE`.
+</ResponseField>
+
+<ResponseField name="ownerDocumentNumber" type="string">
+  Owner's identity document number.
+</ResponseField>
+
+<ResponseField name="ownerFullName" type="string">
+  Full legal name of the property owner.
+</ResponseField>
+
+<ResponseField name="legalRepresentativeName" type="string">
+  Name of the legal representative, if different from the owner. May be `null`.
+</ResponseField>
+
+<ResponseField name="legalDocumentUrl" type="string">
+  URL pointing to the primary legal document. May be `null`.
+</ResponseField>
+
+<ResponseField name="hasCompleteLegalInfo" type="boolean">
+  `true` when `rues`, `rnt`, `ownerDocumentType`, `ownerDocumentNumber`, and `ownerFullName` are all present and non-blank. Motels must have complete legal info before an admin can approve them.
+</ResponseField>

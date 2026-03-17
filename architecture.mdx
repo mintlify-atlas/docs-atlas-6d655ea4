@@ -1,0 +1,221 @@
+---
+title: "Architecture"
+description: "How Ubik Backend's five reactive microservices are structured, how the gateway routes and secures requests, and how the reactive stack works."
+---
+
+## Overview
+
+Ubik Backend is composed of five Spring Boot microservices that communicate over a shared Docker bridge network (`ubik-network`). Every external HTTP request enters through the **API Gateway** on port 8080, which handles JWT validation and routes the request to the appropriate downstream service.
+
+<CardGroup cols={2}>
+  <Card title="API Gateway" icon="shield">
+    **Port 8080** — Spring Cloud Gateway. Validates JWTs, enforces public/private path rules, injects user identity headers, and proxies requests to downstream services.
+  </Card>
+  <Card title="User Management" icon="user">
+    **Port 8081** — Registration, login, JWT issuance, profile management, and password reset. The authoritative source for user identity and roles.
+  </Card>
+  <Card title="Motel Management" icon="building">
+    **Port 8083** — Motel listings, rooms, services, reservations, approval workflow, and Cloudinary image uploads. The largest domain service.
+  </Card>
+  <Card title="Notification Service" icon="bell">
+    **Port 8084** — Sends transactional emails (reservation confirmations, password reset links) via SMTP. Consumed by other services when events occur.
+  </Card>
+  <Card title="Payment Service" icon="credit-card">
+    **Port 8085** — MercadoPago OAuth connection flow, payment preference creation, and webhook processing for payment confirmation. Depends on Motel Management and Notification Service.
+  </Card>
+</CardGroup>
+
+## Service responsibilities
+
+| Service | Port | Key responsibilities | Direct DB access |
+|---------|------|---------------------|------------------|
+| Gateway | 8080 | Routing, JWT validation, header injection | No |
+| User Management | 8081 | Auth, JWT issuance, user profiles, roles | Yes (R2DBC) |
+| Motel Management | 8083 | Motels, rooms, services, reservations, images | Yes (R2DBC) |
+| Notification Service | 8084 | Email dispatch (SMTP) | No |
+| Payment Service | 8085 | MercadoPago integration, webhooks | Yes (R2DBC) |
+
+## Hexagonal (ports and adapters) architecture
+
+Each microservice follows a hexagonal architecture pattern, keeping the domain model independent of infrastructure concerns.
+
+```
+┌─────────────────────────────────────────────────────┐
+│                   Microservice                       │
+│                                                     │
+│  ┌──────────┐   ┌────────────────┐   ┌──────────┐  │
+│  │ Inbound  │   │     Domain     │   │ Outbound │  │
+│  │ Adapters │──▶│  (Use Cases,   │──▶│ Adapters │  │
+│  │          │   │   Entities,    │   │          │  │
+│  │ REST     │   │    Ports)      │   │ R2DBC    │  │
+│  │ Controllers│  │               │   │ HTTP     │  │
+│  └──────────┘   └────────────────┘   └──────────┘  │
+└─────────────────────────────────────────────────────┘
+```
+
+- **Domain layer** — Pure Java entities and port interfaces. No Spring or framework dependencies.
+- **Application layer** — Use case implementations that orchestrate domain logic. Returns `Mono`/`Flux` types.
+- **Inbound adapters** — Spring WebFlux `@RestController` classes that translate HTTP requests into use case calls.
+- **Outbound adapters** — R2DBC repositories, HTTP clients, email senders, and external SDK wrappers.
+
+The `AuthController` in User Management is a representative inbound adapter:
+
+```java
+// userManagement/.../controller/AuthController.java
+@RestController
+@RequestMapping("/api/auth")
+public class AuthController {
+    @PostMapping("/register")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Mono<String> register(@Valid @RequestBody RegisterRequest request) {
+        return userUseCase.register(request);
+    }
+
+    @PostMapping("/login")
+    public Mono<String> login(@Valid @RequestBody LoginRequest request) {
+        return userUseCase.login(request);
+    }
+}
+```
+
+## Gateway routing table
+
+Spring Cloud Gateway evaluates routes in declaration order. Routes declared earlier take precedence when multiple predicates could match the same path.
+
+| Priority | Route ID | Path predicate | Upstream service |
+|----------|----------|----------------|------------------|
+| 1 | `motel-management-my-motels` | `GET /api/auth/motels/my-motels` | motel-management-service:8083 |
+| 2 | `motel-management-auth-motels-userid` | `/api/auth/motels/{userId}` | motel-management-service:8083 |
+| 3 | `userManagement-auth` | `/api/auth/**` | usermanagement-service:8081 |
+| 4 | `userManagement-profile` | `/api/user/**` | usermanagement-service:8081 |
+| 5 | `notificationService` | `/api/notifications/**` | notificationService:8084 |
+| 6 | `motel-management-motels` | `/api/motels/**` | motel-management-service:8083 |
+| 7 | `motel-management-rooms` | `/api/rooms/**` | motel-management-service:8083 |
+| 8 | `motel-management-services` | `/api/services/**` | motel-management-service:8083 |
+| 9 | `motel-reservations` | `/api/reservations/**` | motel-management-service:8083 |
+| 10 | `payment-service` | `/api/payments/**` | payment-service:8085 |
+
+<Note>
+Routes 1 and 2 (authenticated motel routes under `/api/auth/motels/`) are intentionally declared before route 3 (`/api/auth/**`). This ensures that motel-specific authenticated paths are forwarded to the Motel Management service, not to User Management.
+</Note>
+
+All routes use `StripPrefix=0`, meaning the full path (including `/api/`) is forwarded to the upstream service unchanged.
+
+## JWT authentication flow
+
+The `JwtAuthenticationFilter` is a `WebFilter` that runs on every request before Spring Security's authorization chain.
+
+```
+Client request
+     │
+     ▼
+┌────────────────────────────────────────┐
+│         JwtAuthenticationFilter        │
+│                                        │
+│  1. Skip OPTIONS requests (CORS)       │
+│  2. Is path public?                    │
+│     ├── YES → forward as-is            │
+│     └── NO  → extract Bearer token     │
+│  3. Validate JWT signature + claims    │
+│     ├── INVALID → 401 Unauthorized     │
+│     └── VALID → mutate request:        │
+│         X-User-Username: <sub>         │
+│         X-User-Role:     <role>        │
+│         X-User-Id:       <userId>      │
+│  4. Register Authentication in         │
+│     ReactiveSecurityContextHolder      │
+│  5. Forward mutated request            │
+└────────────────────────────────────────┘
+     │
+     ▼
+Downstream microservice
+(reads X-User-* headers directly)
+```
+
+### Public paths
+
+The filter bypasses token validation for the following paths:
+
+- `/api/auth/**` — Login, registration, and password reset (except `/api/auth/motels/**`, which requires a token)
+- `/actuator/**` — Health and metrics endpoints
+- `GET /api/motels/**` — Public motel browsing
+- `GET /api/rooms/**` — Public room browsing
+- `GET /api/services/**` — Public service listings
+
+### Injected headers
+
+Once a token is validated, the gateway injects three headers that downstream services trust without performing their own JWT parsing:
+
+| Header | JWT claim source | Example value |
+|--------|-----------------|---------------|
+| `X-User-Id` | `userId` claim | `42` |
+| `X-User-Username` | `sub` claim | `alice` |
+| `X-User-Role` | `role` claim | `PROPERTY_OWNER` |
+
+### Role-based authorization
+
+The `AuthorizationFilter` (a `GatewayFilterFactory`) enforces per-endpoint permissions after the JWT filter has injected the headers:
+
+| Role | Permissions |
+|------|-------------|
+| `ADMIN` | Full access to all endpoints |
+| `PROPERTY_OWNER` | Full CRUD on `/api/motels`, `/api/rooms`, `/api/services`; GET + PUT on `/api/bookings` |
+| `USER` | GET only on `/api/motels`, `/api/rooms`, `/api/services`; GET, POST, PUT on `/api/bookings` |
+
+## Reactive stack
+
+The entire platform uses non-blocking I/O from the HTTP layer down to the database. There are no blocking calls in the hot path.
+
+<AccordionGroup>
+  <Accordion title="Spring WebFlux">
+    All REST controllers use `@RestController` with `Mono<T>` or `Flux<T>` return types instead of the blocking `T` or `List<T>` used in traditional Spring MVC. The embedded server is Netty (not Tomcat), which handles I/O with an event-loop model.
+
+    ```java
+    // Reactive endpoint — returns immediately, no thread blocks
+    public Mono<String> login(@Valid @RequestBody LoginRequest request) {
+        return userUseCase.login(request);
+    }
+    ```
+  </Accordion>
+  <Accordion title="R2DBC (Reactive Relational Database Connectivity)">
+    All database access uses R2DBC instead of JDBC/JPA. Queries return `Mono<T>` or `Flux<T>`, so no thread blocks waiting for a database response. The project targets MySQL (Azure Flexible Server) using the `r2dbc-mysql` driver version 1.4.0.
+
+    The connection is configured via the `SPRING_R2DBC_URL` environment variable, using the `r2dbc:mysql://` scheme.
+  </Accordion>
+  <Accordion title="Project Reactor (Mono and Flux)">
+    Ubik uses [Project Reactor](https://projectreactor.io) as its reactive streams implementation:
+
+    - **`Mono<T>`** — A stream of 0 or 1 item. Used for single-entity operations (find by ID, create, login).
+    - **`Flux<T>`** — A stream of 0 to N items. Used for collection operations (list all motels, list rooms for a motel).
+
+    Operators like `map`, `flatMap`, `filter`, and `switchIfEmpty` compose async pipelines without callbacks.
+  </Accordion>
+  <Accordion title="Spring Cloud Gateway (reactive)">
+    The gateway itself is built on Spring WebFlux, so all routing, filter execution, and upstream proxying is non-blocking. `WebFilter` and `GatewayFilterFactory` implementations return `Mono<Void>`, and the reactive security context (`ReactiveSecurityContextHolder`) propagates authentication through the pipeline.
+  </Accordion>
+</AccordionGroup>
+
+## Inter-service communication
+
+Services do not call each other synchronously over HTTP in the current implementation. Cross-service data needs are satisfied through startup-time configuration:
+
+- **Role IDs** (`ROLE_ID_ADMIN`, `ROLE_ID_PROPERTY_OWNER`, `ROLE_ID_USER`) are injected as environment variables into both the Gateway and Motel Management service, eliminating the need for a runtime call to User Management to resolve role names.
+- **Payment Service** depends on `motel-management-service` and `notification-service` being healthy before it starts (declared via `depends_on` with `condition: service_healthy` in `docker-compose.yml`).
+- **JWT secret** is shared between User Management (which signs tokens) and the Gateway (which validates them) via the `JWT_SECRET` environment variable.
+
+<Note>
+All five services run on the same Docker bridge network (`ubik-network`). Services reference each other by container name (e.g., `http://usermanagement-service:8081`) rather than by IP address.
+</Note>
+
+## Startup dependency order
+
+```
+usermanagement-service  ──┐
+motel-management-service ──┼──▶  payment-service ──┐
+notification-service    ──┘                         ├──▶  gateway
+                                                    │
+motel-management-service ──────────────────────────┘
+notification-service    ──┘
+```
+
+The gateway will not accept traffic until all three foundational services have passed their Actuator health checks.

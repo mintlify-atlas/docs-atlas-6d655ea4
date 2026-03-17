@@ -1,0 +1,157 @@
+---
+title: "Update motel"
+description: "Update an existing motel's details. Requires authentication. Property owners can only update their own motels."
+---
+
+## PUT /api/motels/{id}
+
+Replaces the editable fields of an existing motel. The motel's `propertyId`, `dateCreated`, and `approvalStatus` are preserved — updating a motel does not reset or change its approval state.
+
+<Info>
+  You must be authenticated as a **Property Owner** or **Admin**. The API gateway forwards your identity via `X-User-Username` and `X-User-Role`.
+</Info>
+
+### Ownership check
+
+The endpoint enforces ownership:
+
+- **Admin** — can update any motel without restriction.
+- **Property Owner** — the server resolves your user ID from `X-User-Username` and verifies that the motel's `propertyId` matches your ID. If it does not, the request is rejected with `403 Forbidden`.
+
+Any other role receives `403 Forbidden` immediately.
+
+---
+
+## Path parameter
+
+<ParamField path="id" type="number" required>
+  Numeric ID of the motel to update.
+</ParamField>
+
+## Required headers (set by the gateway)
+
+<ParamField header="X-User-Username" type="string" required>
+  Username of the authenticated caller.
+</ParamField>
+
+<ParamField header="X-User-Role" type="string" required>
+  Role ID of the caller.
+</ParamField>
+
+---
+
+## Request body
+
+### Basic information
+
+<ParamField body="name" type="string" required>
+  Updated display name. Must be between 3 and 100 characters.
+</ParamField>
+
+<ParamField body="address" type="string" required>
+  Updated street address. Maximum 255 characters.
+</ParamField>
+
+<ParamField body="city" type="string" required>
+  Updated city. Maximum 100 characters.
+</ParamField>
+
+<ParamField body="phoneNumber" type="string">
+  Updated contact phone number. Maximum 20 characters.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Updated description. Maximum 500 characters.
+</ParamField>
+
+<ParamField body="imageUrls" type="string[]">
+  Replacement list of image URLs. Maximum 10 entries; each URL must not exceed 500 characters. Supplying this field overwrites the existing list entirely.
+</ParamField>
+
+<ParamField body="latitude" type="number">
+  Updated latitude. Must be between -90 and 90.
+</ParamField>
+
+<ParamField body="longitude" type="number">
+  Updated longitude. Must be between -180 and 180.
+</ParamField>
+
+### Legal information
+
+<ParamField body="rues" type="string">
+  Updated RUES number. Maximum 100 characters.
+</ParamField>
+
+<ParamField body="rnt" type="string">
+  Updated RNT number. Maximum 100 characters.
+</ParamField>
+
+<ParamField body="ownerDocumentType" type="string">
+  Updated document type. Accepted values: `CC`, `NIT`, `CE`, `PASAPORTE`.
+</ParamField>
+
+<ParamField body="ownerDocumentNumber" type="string">
+  Updated document number. Maximum 50 characters.
+</ParamField>
+
+<ParamField body="ownerFullName" type="string">
+  Updated owner full name. Maximum 200 characters.
+</ParamField>
+
+<ParamField body="legalRepresentativeName" type="string">
+  Updated legal representative name. Maximum 200 characters.
+</ParamField>
+
+<ParamField body="legalDocumentUrl" type="string">
+  Updated URL for the primary legal document. Maximum 500 characters.
+</ParamField>
+
+---
+
+## Response
+
+**`200 OK`** — Returns the updated motel as a [MotelResponse](/api/motels/list#motelresponse-fields).
+
+### Error responses
+
+| Status | Cause |
+|--------|-------|
+| `400 Bad Request` | One or more validation constraints were violated. |
+| `401 Unauthorized` | `X-User-Username` header is absent or blank. |
+| `403 Forbidden` | The caller's role is neither Property Owner nor Admin, or the property owner does not own the specified motel. |
+| `404 Not Found` | No motel exists with the given ID, or no user record exists for the username in `X-User-Username`. |
+
+---
+
+## Example
+
+<CodeGroup>
+
+```bash cURL
+curl --request PUT \
+  --url https://api.example.com/api/motels/101 \
+  --header 'Content-Type: application/json' \
+  --header 'X-User-Username: ana.gomez' \
+  --header 'X-User-Role: <ROLE_ID_PROPERTY_OWNER>' \
+  --data '{
+    "name": "Hotel Las Palmas Renovado",
+    "address": "Calle 45 # 12-30",
+    "city": "Medellín",
+    "phoneNumber": "+573009876543",
+    "description": "Newly renovated rooms near the city center.",
+    "imageUrls": [
+      "https://cdn.example.com/motels/palmas-new-front.jpg"
+    ],
+    "latitude": 6.2442,
+    "longitude": -75.5812,
+    "rues": "900123456-1",
+    "rnt": "RNT-2024-00789",
+    "ownerDocumentType": "CC",
+    "ownerDocumentNumber": "1020304050",
+    "ownerFullName": "Ana Gómez Restrepo",
+    "legalRepresentativeName": null,
+    "legalDocumentUrl": "https://cdn.example.com/legal/palmas-docs.pdf"
+  }'
+```
+
+</CodeGroup>

@@ -1,0 +1,102 @@
+---
+title: "Introduction"
+description: "Ubik Backend is a reactive microservices platform for motel and hotel property management, connecting property owners and guests through a modern, scalable API."
+---
+
+## What is Ubik?
+
+Ubik is a full-stack SaaS platform designed to streamline motel and hotel management in the Colombian market. Built with a reactive microservices architecture, Ubik enables:
+
+- **Property owners** to register and manage their establishments, rooms, and services
+- **Guests** to discover available motels, check room availability, and make reservations
+- **Administrators** to review and approve motel listings through a structured workflow
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="rocket" href="/quickstart">
+    Get the platform running locally in minutes
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/architecture">
+    Understand the microservices design
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/auth/register">
+    Explore all REST endpoints
+  </Card>
+  <Card title="Deployment" icon="cloud" href="/deployment/docker">
+    Deploy with Docker Compose
+  </Card>
+</CardGroup>
+
+## Platform overview
+
+Ubik Backend is composed of five reactive microservices, each responsible for a specific domain:
+
+<CardGroup cols={2}>
+  <Card title="API Gateway" icon="shield" href="/architecture">
+    Spring Cloud Gateway with JWT validation and role-based routing on port 8080
+  </Card>
+  <Card title="User Management" icon="user" href="/features/user-management">
+    Registration, authentication, JWT issuance, and profile management on port 8081
+  </Card>
+  <Card title="Motel Management" icon="building" href="/features/motel-management">
+    Motel listings, rooms, services, reservations, and approval workflow on port 8083
+  </Card>
+  <Card title="Notification Service" icon="bell" href="/features/notifications">
+    Email notifications for reservation events and password resets on port 8084
+  </Card>
+  <Card title="Payment Service" icon="credit-card" href="/features/payments">
+    MercadoPago integration with OAuth and webhook support on port 8085
+  </Card>
+</CardGroup>
+
+## Key features
+
+<AccordionGroup>
+  <Accordion title="Reactive architecture">
+    Built with **Spring WebFlux** and **R2DBC** for non-blocking I/O throughout the entire stack. All service calls return `Mono` or `Flux` reactive types, enabling high throughput with minimal thread usage.
+  </Accordion>
+  <Accordion title="JWT-based authentication with RBAC">
+    The API Gateway validates JWT tokens on every request and injects user identity (`X-User-Id`, `X-User-Username`, `X-User-Role`) as headers into downstream services. Three roles are supported: **Admin**, **Property Owner**, and **User (Client)**.
+  </Accordion>
+  <Accordion title="Motel approval workflow">
+    New motel listings go through a structured approval process: `PENDING` → `UNDER_REVIEW` → `APPROVED` (or `REJECTED`). Admins must verify legal documentation (RUES, RNT, owner documents) before approval.
+  </Accordion>
+  <Accordion title="MercadoPago payment integration">
+    Property owners connect their MercadoPago accounts via OAuth. Guests pay through MercadoPago's hosted checkout, and the platform handles webhook notifications to confirm or reject payments automatically.
+  </Accordion>
+  <Accordion title="Cloudinary image management">
+    Motel and room images are uploaded directly to Cloudinary, with URLs stored in the database. The image upload controller handles multipart form data reactively.
+  </Accordion>
+  <Accordion title="Angular PWA frontend">
+    The companion `ubik-app` is a Progressive Web App built with Angular 20, featuring server-side rendering, Tailwind CSS, PrimeNG components, and Leaflet map integration for geolocation.
+  </Accordion>
+</AccordionGroup>
+
+## Technology stack
+
+| Layer | Technology |
+|-------|-----------|
+| Language | Java 17 |
+| Framework | Spring Boot 3.2, Spring WebFlux, Spring Cloud Gateway |
+| Database | MySQL (Azure Flexible Server) via R2DBC |
+| Authentication | JWT (JJWT library) |
+| Payments | MercadoPago SDK |
+| Image storage | Cloudinary |
+| Email | Spring Mail (SMTP) |
+| Containerization | Docker, Docker Compose |
+| Frontend | Angular 20, TypeScript, Tailwind CSS, PrimeNG |
+
+## Project structure
+
+```
+ubik-backend/
+├── microservicios/
+│   └── microreactivo/
+│       ├── gateway/              # API Gateway (port 8080)
+│       ├── userManagement/       # Auth & user service (port 8081)
+│       ├── motelManegement/      # Motel/room/reservation service (port 8083)
+│       ├── notificationService/  # Email notifications (port 8084)
+│       ├── paymentService/       # MercadoPago payments (port 8085)
+│       ├── docker-compose.yml    # Full-stack orchestration
+│       └── pom.xml               # Parent Maven POM
+└── ubik-app/                     # Angular PWA frontend
+```

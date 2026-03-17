@@ -1,0 +1,272 @@
+---
+title: "Manage reservations"
+description: "Query, update, confirm, cancel, and perform check-in/check-out on reservations."
+---
+
+Once a reservation exists, you can read its state, transition it through the lifecycle, or remove it if it has been cancelled.
+
+## Reservation status lifecycle
+
+Reservations follow a strict state machine. The table below shows which transitions are valid:
+
+| From | To | How |
+|------|----|-----|
+| `PENDING` | `CONFIRMED` | `PATCH /{id}/confirm` |
+| `PENDING` | `CANCELLED` | `PATCH /{id}/cancel` |
+| `CONFIRMED` | `CHECKED_IN` | `PATCH /{id}/checkin` |
+| `CONFIRMED` | `CANCELLED` | `PATCH /{id}/cancel` |
+| `CHECKED_IN` | `CHECKED_OUT` | `PATCH /{id}/checkout` |
+
+<Note>
+  Only `PENDING` and `CONFIRMED` reservations can be cancelled. A reservation in `CHECKED_IN`, `CHECKED_OUT`, or already `CANCELLED` state cannot transition back.
+</Note>
+
+A reservation is considered **active** when its status is `PENDING`, `CONFIRMED`, or `CHECKED_IN`. Active reservations block room availability and prevent room deletion.
+
+---
+
+## Get all reservations
+
+```http
+GET /api/reservations
+```
+
+Returns all reservations across all users and rooms.
+
+**Response** — array of [Reservation objects](#reservation-object).
+
+---
+
+## Get a reservation by ID
+
+```http
+GET /api/reservations/{id}
+```
+
+<ParamField path="id" type="integer" required>
+  The numeric ID of the reservation.
+</ParamField>
+
+**Response** — a single [Reservation object](#reservation-object).
+
+---
+
+## List reservations by room
+
+```http
+GET /api/reservations/room/{roomId}
+```
+
+<ParamField path="roomId" type="integer" required>
+  The numeric ID of the room.
+</ParamField>
+
+**Response** — array of [Reservation objects](#reservation-object) for that room.
+
+---
+
+## List reservations by user
+
+```http
+GET /api/reservations/user/{userId}
+```
+
+<ParamField path="userId" type="integer" required>
+  The numeric ID of the user.
+</ParamField>
+
+**Response** — array of [Reservation objects](#reservation-object) for that user.
+
+---
+
+## List active reservations for a room
+
+```http
+GET /api/reservations/room/{roomId}/active
+```
+
+Returns reservations with status `PENDING`, `CONFIRMED`, or `CHECKED_IN` for the specified room.
+
+<ParamField path="roomId" type="integer" required>
+  The numeric ID of the room.
+</ParamField>
+
+**Response** — array of active [Reservation objects](#reservation-object).
+
+---
+
+## List reservations by status
+
+```http
+GET /api/reservations/status/{status}
+```
+
+<ParamField path="status" type="string" required>
+  One of: `PENDING`, `CONFIRMED`, `CHECKED_IN`, `CHECKED_OUT`, `CANCELLED`. Case-insensitive.
+</ParamField>
+
+**Response** — array of [Reservation objects](#reservation-object) with that status.
+
+---
+
+## Update a reservation
+
+```http
+PUT /api/reservations/{id}
+```
+
+Updates the mutable fields of an existing reservation (dates, price, and special requests).
+
+<ParamField path="id" type="integer" required>
+  The numeric ID of the reservation to update.
+</ParamField>
+
+**Request body**
+
+<ParamField body="checkInDate" type="string" required>
+  Updated check-in datetime in ISO 8601 format.
+</ParamField>
+
+<ParamField body="checkOutDate" type="string" required>
+  Updated check-out datetime in ISO 8601 format.
+</ParamField>
+
+<ParamField body="totalPrice" type="number" required>
+  Updated total price. Must be greater than zero.
+</ParamField>
+
+<ParamField body="specialRequests" type="string">
+  Updated special requests. Maximum 500 characters.
+</ParamField>
+
+**Response** — `200 OK` with the updated [Reservation object](#reservation-object).
+
+---
+
+## Confirm a reservation
+
+```http
+PATCH /api/reservations/{id}/confirm
+```
+
+Transitions a `PENDING` reservation to `CONFIRMED`. This is typically called after a successful payment.
+
+<ParamField path="id" type="integer" required>
+  The numeric ID of the reservation.
+</ParamField>
+
+**Response** — `200 OK` with the updated [Reservation object](#reservation-object).
+
+---
+
+## Cancel a reservation
+
+```http
+PATCH /api/reservations/{id}/cancel
+```
+
+Transitions a `PENDING` or `CONFIRMED` reservation to `CANCELLED`.
+
+<ParamField path="id" type="integer" required>
+  The numeric ID of the reservation.
+</ParamField>
+
+**Response** — `200 OK` with the updated [Reservation object](#reservation-object).
+
+---
+
+## Check in
+
+```http
+PATCH /api/reservations/{id}/checkin
+```
+
+Transitions a `CONFIRMED` reservation to `CHECKED_IN`, recording the guest's arrival.
+
+<ParamField path="id" type="integer" required>
+  The numeric ID of the reservation.
+</ParamField>
+
+**Response** — `200 OK` with the updated [Reservation object](#reservation-object).
+
+---
+
+## Check out
+
+```http
+PATCH /api/reservations/{id}/checkout
+```
+
+Transitions a `CHECKED_IN` reservation to `CHECKED_OUT`, marking the stay as complete.
+
+<ParamField path="id" type="integer" required>
+  The numeric ID of the reservation.
+</ParamField>
+
+**Response** — `200 OK` with the updated [Reservation object](#reservation-object).
+
+---
+
+## Delete a reservation
+
+```http
+DELETE /api/reservations/{id}
+```
+
+<Warning>
+  You can only delete reservations that have a `CANCELLED` status. Attempting to delete an active or completed reservation will result in an error.
+</Warning>
+
+<ParamField path="id" type="integer" required>
+  The numeric ID of the reservation to delete.
+</ParamField>
+
+**Response** — `204 No Content`.
+
+---
+
+## Reservation object
+
+<ResponseField name="id" type="integer">
+  Unique identifier of the reservation.
+</ResponseField>
+
+<ResponseField name="roomId" type="integer">
+  ID of the reserved room.
+</ResponseField>
+
+<ResponseField name="userId" type="integer">
+  ID of the guest who owns this reservation.
+</ResponseField>
+
+<ResponseField name="checkInDate" type="string">
+  Check-in datetime in ISO 8601 format.
+</ResponseField>
+
+<ResponseField name="checkOutDate" type="string">
+  Check-out datetime in ISO 8601 format.
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Current status. One of `PENDING`, `CONFIRMED`, `CHECKED_IN`, `CHECKED_OUT`, `CANCELLED`.
+</ResponseField>
+
+<ResponseField name="totalPrice" type="number">
+  Total price for the stay.
+</ResponseField>
+
+<ResponseField name="specialRequests" type="string">
+  Any special requests recorded at booking time.
+</ResponseField>
+
+<ResponseField name="confirmationCode" type="string">
+  Auto-generated unique confirmation code.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  ISO 8601 timestamp of creation.
+</ResponseField>
+
+<ResponseField name="updatedAt" type="string">
+  ISO 8601 timestamp of the last status change or update.
+</ResponseField>

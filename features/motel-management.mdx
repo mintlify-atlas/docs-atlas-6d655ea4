@@ -1,0 +1,232 @@
+---
+title: "Motel management"
+description: "Create motel listings, upload images via Cloudinary, and navigate the admin approval workflow from PENDING to APPROVED."
+---
+
+The motel management microservice handles property listings, room inventory, and the approval lifecycle. It exposes two controller families: public/owner endpoints under `/api/motels` and admin-only endpoints under `/api/admin/motels`.
+
+## Role permissions
+
+The service reads role IDs from environment variables at startup and enforces them on every protected request via the `X-User-Role` header injected by the gateway.
+
+<CardGroup cols={3}>
+  <Card title="Admin" icon="shield">
+    - Read all motels, filtered by any status
+    - Update or delete any motel
+    - Move motels through the approval workflow
+    - View approval statistics
+  </Card>
+  <Card title="Property Owner" icon="building">
+    - Create new motel listings
+    - Update and delete their own motels only
+    - Upload images via Cloudinary
+  </Card>
+  <Card title="User" icon="user">
+    - Browse all approved motels
+    - Filter motels by city
+    - View individual motel details
+  </Card>
+</CardGroup>
+
+## Motel domain model
+
+The `Motel` record contains all listing data alongside legal compliance fields:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `Long` | Auto-generated primary key |
+| `name` | `String` | Display name of the property |
+| `address` | `String` | Street address |
+| `phoneNumber` | `String` | Contact phone |
+| `description` | `String` | Free-text description |
+| `city` | `String` | City used for search filtering |
+| `propertyId` | `Long` | User ID of the owning account (set from the authenticated user, never from the request body) |
+| `dateCreated` | `LocalDateTime` | Auto-set on creation |
+| `imageUrls` | `List<String>` | Cloudinary image URLs |
+| `latitude` | `Double` | Geographic latitude |
+| `longitude` | `Double` | Geographic longitude |
+| `approvalStatus` | `ApprovalStatus` | Current workflow state |
+| `approvalDate` | `LocalDateTime` | Timestamp of the last approval/rejection action |
+| `approvedByUserId` | `Long` | Admin who approved or rejected |
+| `rejectionReason` | `String` | Reason text when status is `REJECTED` |
+| `rues` | `String` | Registro Único Empresarial y Social (RUES) number |
+| `rnt` | `String` | Registro Nacional de Turismo (RNT) number |
+| `ownerDocumentType` | `DocumentType` | `CC`, `NIT`, `CE`, or `PASAPORTE` |
+| `ownerDocumentNumber` | `String` | Owner's identification number |
+| `ownerFullName` | `String` | Owner's full legal name |
+| `legalRepresentativeName` | `String` | Legal representative's name (optional) |
+| `legalDocumentUrl` | `String` | Cloudinary URL of the primary legal document |
+
+## Creating a motel listing
+
+Only accounts with the Property Owner or Admin role can create listings. The `propertyId` is always set from the authenticated user's database ID — any value you send in the request body is silently ignored.
+
+```bash
+curl -X POST https://your-gateway/api/motels \
+  -H "Authorization: Bearer eyJhbGci..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Hotel Casa Colonial",
+    "address": "Calle 10 # 5-32, La Candelaria",
+    "phoneNumber": "+5716001234",
+    "description": "Charming colonial-era boutique hotel in the historic center.",
+    "city": "Bogotá",
+    "latitude": 4.5981,
+    "longitude": -74.0762,
+    "imageUrls": [
+      "https://res.cloudinary.com/ubik/image/upload/v1/motels/casa-colonial-1.jpg"
+    ],
+    "rues": "REG-2023-00412",
+    "rnt": "RNT-BOG-00891",
+    "ownerDocumentType": "NIT",
+    "ownerDocumentNumber": "900.456.789-1",
+    "ownerFullName": "Casa Colonial S.A.S.",
+    "legalRepresentativeName": "Carlos Mejía Vargas",
+    "legalDocumentUrl": "https://res.cloudinary.com/ubik/image/upload/v1/legal/casa-colonial-nit.pdf"
+  }'
+```
+
+A successful request returns `HTTP 201` with the full motel object. The `approvalStatus` is automatically set to `PENDING` for all new listings.
+
+### Cloudinary image upload
+
+Images and legal documents are uploaded to Cloudinary before creating or updating a motel. Upload your files directly to your Cloudinary account and include the resulting `secure_url` values in `imageUrls` and `legalDocumentUrl`.
+
+<Tip>
+Organize your Cloudinary uploads under separate folders: use `motels/` for property images and `legal/` for legal documents. This makes it easier to apply access controls and transformations per category.
+</Tip>
+
+### Required legal documents
+
+The admin approval step checks `hasCompleteLegalInfo()` before allowing approval. A motel passes this check only when all of the following are non-blank:
+
+- `rues` — Registro Único Empresarial y Social
+- `rnt` — Registro Nacional de Turismo
+- `ownerDocumentType` — one of `CC`, `NIT`, `CE`, `PASAPORTE`
+- `ownerDocumentNumber`
+- `ownerFullName`
+
+Attempting to approve a motel with missing legal information returns `HTTP 422 Unprocessable Entity`.
+
+## Approval workflow
+
+Every motel starts in `PENDING` and must pass through admin review before it becomes visible as approved.
+
+```
+PENDING ──► UNDER_REVIEW ──► APPROVED
+    │                │
+    └────────────────┴──► REJECTED
+```
+
+### ApprovalStatus values
+
+| Value | Meaning |
+|-------|---------|
+| `PENDING` | Newly created, awaiting admin attention |
+| `UNDER_REVIEW` | Admin has started reviewing the listing |
+| `APPROVED` | Listing is active and publicly visible |
+| `REJECTED` | Listing was rejected; a `rejectionReason` is required |
+
+<Note>
+A motel can only be edited (via `PUT /api/motels/{id}`) when its status is `PENDING` or `REJECTED`. Listings in `UNDER_REVIEW` or `APPROVED` status are locked.
+</Note>
+
+### Admin approval endpoints
+
+All admin endpoints require the Admin role and are under `/api/admin/motels`.
+
+<AccordionGroup>
+  <Accordion title="List pending motels">
+    Returns all motels in `PENDING` or `UNDER_REVIEW` status.
+
+    ```bash
+    curl https://your-gateway/api/admin/motels/pending \
+      -H "Authorization: Bearer <admin-token>"
+    ```
+  </Accordion>
+  <Accordion title="Mark a motel as under review">
+    Transitions a motel from any status to `UNDER_REVIEW`.
+
+    ```bash
+    curl -X PATCH https://your-gateway/api/admin/motels/7/review \
+      -H "Authorization: Bearer <admin-token>"
+    ```
+  </Accordion>
+  <Accordion title="Approve a motel">
+    Sets status to `APPROVED`. Fails with `HTTP 422` if legal information is incomplete.
+
+    ```bash
+    curl -X POST https://your-gateway/api/admin/motels/7/approve \
+      -H "Authorization: Bearer <admin-token>"
+    ```
+  </Accordion>
+  <Accordion title="Reject a motel">
+    Sets status to `REJECTED` with a mandatory reason string.
+
+    ```bash
+    curl -X POST https://your-gateway/api/admin/motels/7/reject \
+      -H "Authorization: Bearer <admin-token>" \
+      -H "Content-Type: application/json" \
+      -d '{ "reason": "RNT number is expired. Please renew and resubmit." }'
+    ```
+  </Accordion>
+  <Accordion title="View approval statistics">
+    Returns counts of motels in each status, plus a count of listings with incomplete legal information.
+
+    ```bash
+    curl https://your-gateway/api/admin/motels/statistics \
+      -H "Authorization: Bearer <admin-token>"
+    ```
+
+    ```json
+    {
+      "totalMotels": 58,
+      "pendingApproval": 12,
+      "underReview": 3,
+      "approved": 40,
+      "rejected": 3,
+      "withIncompleteLegalInfo": 5
+    }
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Public endpoints
+
+These endpoints require no authentication and always return approved listings:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/motels` | All motels |
+| `GET` | `/api/motels/{id}` | Single motel by ID |
+| `GET` | `/api/motels/city/{city}` | Motels filtered by city name |
+
+## Room management
+
+Rooms are nested under their parent motel. Public read endpoints require no authentication; write operations require authentication.
+
+| Method | Path | Auth required | Description |
+|--------|------|:---:|-------------|
+| `GET` | `/api/rooms` | No | All rooms |
+| `GET` | `/api/rooms/{id}` | No | Room by ID |
+| `GET` | `/api/rooms/motel/{motelId}` | No | All rooms for a motel |
+| `GET` | `/api/rooms/motel/{motelId}/available` | No | Available rooms for a motel |
+| `POST` | `/api/rooms` | Yes | Create a room |
+| `PUT` | `/api/rooms/{id}` | Yes | Update a room |
+| `DELETE` | `/api/rooms/{id}` | Yes | Delete a room |
+
+### Room domain model fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `Long` | Auto-generated primary key |
+| `motelId` | `Long` | Parent motel reference |
+| `number` | `String` | Room number or identifier |
+| `roomType` | `String` | Room category (e.g. `SUITE`, `STANDARD`) |
+| `price` | `Double` | Price per night |
+| `description` | `String` | Room description |
+| `isAvailable` | `Boolean` | Availability flag (defaults to `true` on creation) |
+| `imageUrls` | `List<String>` | Cloudinary image URLs |
+| `latitude` | `Double` | Room-level GPS latitude |
+| `longitude` | `Double` | Room-level GPS longitude |
+| `serviceIds` | `List<Long>` | IDs of associated services/amenities |

@@ -1,0 +1,59 @@
+---
+title: "Login"
+description: "Authenticate with a username and password to receive a JWT access token."
+---
+
+`POST /api/auth/login`
+
+Validates the provided credentials against the stored account. On success, returns a signed JWT token you can use to authenticate subsequent requests.
+
+## Request body
+
+<ParamField body="username" type="string" required>
+  The account username. Cannot be blank.
+</ParamField>
+
+<ParamField body="password" type="string" required>
+  The account password. Cannot be blank.
+</ParamField>
+
+## Response
+
+### 200 OK
+
+Returns a plain JWT token string.
+
+<ResponseField name="(body)" type="string" required>
+  A signed JWT token. Use this value as `Bearer <token>` in the `Authorization` header for protected endpoints.
+</ResponseField>
+
+```json 200
+"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqZG9lIiwicm9sZUlkIjoyLCJpYXQiOjE3MTA2OTkwMDB9.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
+```
+
+### Error responses
+
+| Status | Cause |
+|--------|-------|
+| `400 Bad Request` | A required field is blank. |
+| `400 Bad Request` | The username does not exist, or the password does not match. |
+
+<Note>
+  For security, the API returns the same `400` status whether the username is unknown or the password is wrong. The response body will contain `"ErrorInvalid credentials"`.
+</Note>
+
+## Example
+
+<CodeGroup>
+
+```bash cURL
+curl --request POST \
+  --url https://api.example.com/api/auth/login \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "username": "jdoe",
+    "password": "s3cur3P@ss"
+  }'
+```
+
+</CodeGroup>

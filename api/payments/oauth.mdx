@@ -1,0 +1,132 @@
+---
+title: "MercadoPago OAuth"
+description: "Connect a motel's MercadoPago account so payments are routed to the property owner."
+---
+
+Each motel on the platform collects payments directly into its owner's MercadoPago account using OAuth 2.0. Before a motel can accept payments, its owner must authorize the platform application through MercadoPago's consent flow. The platform stores the resulting access token and uses it when creating payment preferences for that motel's rooms.
+
+## Why OAuth is required
+
+Ubik operates as a marketplace: guests pay the motel owner directly, not a central platform account. MercadoPago's [Marketplace OAuth](https://www.mercadopago.com/developers/en/docs/checkout-pro/additional-content/security/oauth/introduction) flow enables this split-payment model. Without a linked account, `POST /api/payments` will fail for that motel's reservations.
+
+## OAuth flow overview
+
+```
+1. Property owner visits GET /api/payments/oauth/connect/{motelId}
+          │
+          ▼
+2. Platform redirects to MercadoPago authorization page
+          │
+          ▼
+3. Owner grants access in MercadoPago
+          │
+          ▼
+4. MercadoPago redirects to GET /api/payments/oauth/callback?code=XXX&state={motelId}
+          │
+          ▼
+5. Platform exchanges code for access_token, stores it
+```
+
+---
+
+## Initiate authorization
+
+```http
+GET /api/payments/oauth/connect/{motelId}
+```
+
+Redirects the property owner's browser to MercadoPago's authorization page (`302 Found`). The `motelId` is passed as the OAuth `state` parameter so the platform can identify which motel to link when MercadoPago calls back.
+
+<ParamField path="motelId" type="integer" required>
+  The numeric ID of the motel being connected.
+</ParamField>
+
+**Response** — `302 Found` redirect to:
+```
+https://auth.mercadopago.com/authorization
+  ?client_id={CLIENT_ID}
+  &response_type=code
+  &platform_id=mp
+  &state={motelId}
+  &redirect_uri={CONFIGURED_REDIRECT_URI}
+```
+
+You do not call this endpoint programmatically — direct the property owner's browser to it (e.g. via a "Connect MercadoPago" button in the owner dashboard).
+
+---
+
+## OAuth callback
+
+```http
+GET /api/payments/oauth/callback?code={code}&state={motelId}
+```
+
+MercadoPago redirects the owner's browser to this URL after they grant (or deny) access. The platform then exchanges the authorization `code` for an `access_token` by calling MercadoPago's token endpoint.
+
+<ParamField query="code" type="string" required>
+  The authorization code issued by MercadoPago. Valid for a short window; the platform exchanges it immediately.
+</ParamField>
+
+<ParamField query="state" type="integer" required>
+  The `motelId` passed through from the authorization request — used to associate the token with the correct motel.
+</ParamField>
+
+**Response** — `200 OK` with a plain-text confirmation message:
+```
+Cuenta MercadoPago vinculada exitosamente para motel: {motelId}
+```
+
+After this step, the motel is ready to accept payments.
+
+<Note>
+  This endpoint is called by MercadoPago's servers as a redirect, not by your frontend directly. Ensure the callback URL is registered exactly as configured in `mercadopago.redirect-uri`.
+</Note>
+
+---
+
+## Disconnect a motel account
+
+```http
+DELETE /api/payments/oauth/{motelId}
+```
+
+Removes the stored MercadoPago account credentials for the motel. Once disconnected, payment creation for that motel's reservations will fail until the owner reconnects.
+
+<ParamField path="motelId" type="integer" required>
+  The numeric ID of the motel to disconnect.
+</ParamField>
+
+**Response** — `204 No Content`.
+
+<Warning>
+  Disconnecting a motel account does not cancel any in-progress payments. Ensure there are no `PENDING` payments before disconnecting.
+</Warning>
+
+---
+
+## Token storage and refresh
+
+The platform persists the following data for each linked motel:
+
+| Field | Description |
+|-------|-------------|
+| `accessToken` | Used to authenticate requests to MercadoPago's API on behalf of the motel |
+| `refreshToken` | Used to obtain a new `accessToken` when the current one is expiring |
+| `tokenExpiresAt` | Expiry timestamp; the platform auto-refreshes when expiry is less than 1 hour away |
+| `mpUserId` | MercadoPago user ID of the property owner |
+
+The platform automatically refreshes the access token before it expires — you do not need to manage token lifecycle manually.
+
+<Warning>
+  Never expose `accessToken` or `refreshToken` to the client. These values are stored server-side only and are used exclusively in server-to-server calls to MercadoPago.
+</Warning>
+
+## Configuration
+
+The OAuth flow requires the following environment variables to be set on the payment service:
+
+| Variable | Description |
+|----------|-------------|
+| `mercadopago.client-id` | Your MercadoPago application client ID |
+| `mercadopago.client-secret` | Your MercadoPago application client secret |
+| `mercadopago.redirect-uri` | The publicly accessible callback URL, e.g. `https://api.example.com/api/payments/oauth/callback` |

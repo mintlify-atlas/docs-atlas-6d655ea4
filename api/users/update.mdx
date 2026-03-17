@@ -1,0 +1,154 @@
+---
+title: "Update user profile"
+description: "Update the authenticated user's profile fields, including email, phone number, location, and birth date."
+---
+
+`PUT /api/user`
+
+Updates the profile for the currently authenticated user. You only need to include the fields you want to change — any field you omit keeps its existing value.
+
+<Note>
+  The user is identified by the `X-User-Username` header, which your API gateway injects from the validated JWT token. You cannot update another user's profile through this endpoint.
+</Note>
+
+## Authentication
+
+<ParamField header="Authorization" type="string" required>
+  Bearer JWT token obtained from the login or register endpoints. Example: `Bearer eyJhbGci...`
+</ParamField>
+
+## Request body
+
+All fields are optional. Fields you omit are left unchanged.
+
+<ParamField body="email" type="string">
+  New email address for the account. Must be a valid email format (e.g., `user@example.com`).
+</ParamField>
+
+<ParamField body="phoneNumber" type="string">
+  Contact phone number. Maximum 20 characters.
+</ParamField>
+
+<ParamField body="anonymous" type="boolean">
+  Set to `true` to switch the account to anonymous mode, or `false` to disable it.
+</ParamField>
+
+<ParamField body="longitude" type="number">
+  Geographic longitude of the user's location. Must be between `-180.0` and `180.0`.
+</ParamField>
+
+<ParamField body="latitude" type="number">
+  Geographic latitude of the user's location. Must be between `-90.0` and `90.0`.
+</ParamField>
+
+<ParamField body="birthDate" type="string">
+  Date of birth in `YYYY-MM-DD` format. Must be a date in the past.
+</ParamField>
+
+<Warning>
+  `username`, `password`, `roleId`, and `createdAt` are not updatable through this endpoint. To change a password, use the password reset flow.
+</Warning>
+
+### Validation constraints
+
+| Field | Constraint |
+|-------|------------|
+| `email` | Must be a valid email address format |
+| `phoneNumber` | Maximum 20 characters |
+| `longitude` | Between `-180.0` and `180.0` inclusive |
+| `latitude` | Between `-90.0` and `90.0` inclusive |
+| `birthDate` | Must be a past date (`YYYY-MM-DD`) |
+
+## Response
+
+### 200 OK
+
+Returns the full updated profile.
+
+<ResponseField name="id" type="number" required>
+  Unique numeric identifier for the user.
+</ResponseField>
+
+<ResponseField name="username" type="string" required>
+  The user's unique username.
+</ResponseField>
+
+<ResponseField name="email" type="string" required>
+  The user's email address, reflecting any update.
+</ResponseField>
+
+<ResponseField name="phoneNumber" type="string">
+  Contact phone number, reflecting any update. `null` if not set.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string" required>
+  ISO 8601 datetime when the account was created. Not affected by updates.
+</ResponseField>
+
+<ResponseField name="anonymous" type="boolean" required>
+  Whether the account is operating in anonymous mode, reflecting any update.
+</ResponseField>
+
+<ResponseField name="roleId" type="number" required>
+  Numeric ID of the role assigned to this user. Not affected by updates.
+</ResponseField>
+
+<ResponseField name="longitude" type="number">
+  Geographic longitude, reflecting any update. `null` if not set.
+</ResponseField>
+
+<ResponseField name="latitude" type="number">
+  Geographic latitude, reflecting any update. `null` if not set.
+</ResponseField>
+
+<ResponseField name="birthDate" type="string">
+  Date of birth in `YYYY-MM-DD` format, reflecting any update. `null` if not set.
+</ResponseField>
+
+<ResponseField name="age" type="number">
+  Age in years, recalculated from the updated `birthDate`. `null` if `birthDate` is not set.
+</ResponseField>
+
+### Error responses
+
+| Status | Cause |
+|--------|-------|
+| `400 Bad Request` | A field fails validation (e.g., invalid email format, `phoneNumber` too long, out-of-range coordinates, future `birthDate`). |
+| `401 Unauthorized` | The `Authorization` header is missing or the token is invalid. |
+| `404 Not Found` | No user exists for the username extracted from the token. |
+
+## Example
+
+<CodeGroup>
+
+```bash cURL
+curl --request PUT \
+  --url https://api.example.com/api/user \
+  --header 'Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJqZG9lIiwicm9sZUlkIjoyLCJpYXQiOjE3MTA2OTkwMDB9.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c' \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "email": "jdoe.new@example.com",
+    "phoneNumber": "+1-555-0199",
+    "longitude": -73.935242,
+    "latitude": 40.730610,
+    "birthDate": "1990-06-15"
+  }'
+```
+
+</CodeGroup>
+
+```json 200
+{
+  "id": 42,
+  "username": "jdoe",
+  "email": "jdoe.new@example.com",
+  "phoneNumber": "+1-555-0199",
+  "createdAt": "2024-03-01T10:30:00",
+  "anonymous": false,
+  "roleId": 2,
+  "longitude": -73.935242,
+  "latitude": 40.730610,
+  "birthDate": "1990-06-15",
+  "age": 35
+}
+```

@@ -1,0 +1,179 @@
+---
+title: "Payments"
+description: "Integrate MercadoPago marketplace payments, connect property owner accounts via OAuth, and handle webhooks and refunds."
+---
+
+The payment service handles everything money-related: creating MercadoPago payment preferences, processing webhook notifications, and issuing refunds. It uses the MercadoPago Marketplace model, which means payments flow through a property owner's own MercadoPago account while Ubik automatically collects a platform fee.
+
+## Marketplace / split payment model
+
+When a guest pays for a reservation, the money is deposited into the property owner's MercadoPago account. Ubik receives its cut automatically as a `marketplaceFee` set at the time the payment preference is created.
+
+The fee percentage is controlled by the `mercadopago.marketplace-fee-percent` configuration property (default: `10`). For a payment of COP 450,000 with a 10% fee, Ubik receives COP 45,000 and the property owner receives COP 405,000.
+
+<Note>
+For the marketplace model to work, the property owner must first connect their MercadoPago account via the OAuth flow described below. Attempting to create a payment for a motel without a linked account returns an error.
+</Note>
+
+## Property owner OAuth connection
+
+Before any payment can be processed for a motel, its owner must authorize Ubik to create payment preferences on their behalf.
+
+<Steps>
+  <Step title="Redirect the owner to MercadoPago">
+    Call the connect endpoint with the motel's ID. The service builds an authorization URL using your configured `mercadopago.client-id`, `mercadopago.redirect-uri`, and the motel ID as the OAuth `state` parameter, then returns a `302` redirect to MercadoPago.
+
+    ```bash
+    curl -L https://your-gateway/api/payments/oauth/connect/7 \
+      -H "Authorization: Bearer <owner-token>"
+    ```
+
+    The redirect URL looks like:
+    ```
+    https://auth.mercadopago.com/authorization
+      ?client_id=YOUR_CLIENT_ID
+      &response_type=code
+      &platform_id=mp
+      &state=7
+      &redirect_uri=https://your-gateway/api/payments/oauth/callback
+    ```
+  </Step>
+  <Step title="Owner authorizes the app">
+    MercadoPago displays an authorization screen to the property owner. Once they click "Authorize", MercadoPago redirects back to the callback URL with an authorization code.
+  </Step>
+  <Step title="Exchange the code for tokens">
+    The callback endpoint receives the `code` and `state` (motel ID) automatically:
+
+    ```
+    GET /api/payments/oauth/callback?code=TG-abc123&state=7
+    ```
+
+    The service exchanges the authorization code for an `access_token` and `refresh_token` at `https://api.mercadopago.com/oauth/token`, then stores them in the `MotelMpAccountEntity` table. The tokens are refreshed automatically when they are within one hour of expiry.
+  </Step>
+  <Step title="Confirm the connection">
+    The callback endpoint returns a plain-text success message:
+    ```
+    Cuenta MercadoPago vinculada exitosamente para motel: 7
+    ```
+    The motel is now ready to accept payments.
+  </Step>
+</Steps>
+
+### Disconnecting an account
+
+To revoke the MercadoPago connection for a motel:
+
+```bash
+curl -X DELETE https://your-gateway/api/payments/oauth/7 \
+  -H "Authorization: Bearer <owner-token>"
+```
+
+Returns `HTTP 204 No Content`.
+
+## Creating a payment preference
+
+Send a `POST` to `/api/payments` after a reservation is created. The service creates a payment preference in the property owner's MercadoPago account.
+
+### CreatePaymentRequest fields
+
+| Field | Type | Constraints | Description |
+|-------|------|-------------|-------------|
+| `reservationId` | `Long` | Required | The reservation this payment covers |
+| `amount` | `Double` | Required, must be > 0 | Total charge amount |
+| `currency` | `String` | Optional | Currency code; defaults to `COP` |
+
+```bash
+curl -X POST https://your-gateway/api/payments \
+  -H "Authorization: Bearer eyJhbGci..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "reservationId": 88,
+    "amount": 450000.00,
+    "currency": "COP"
+  }'
+```
+
+The response includes an `initPoint` URL. Redirect the guest to this URL to complete payment on MercadoPago's hosted checkout page.
+
+### PaymentResponse fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `Long` | Internal payment record ID |
+| `reservationId` | `Long` | Associated reservation |
+| `userId` | `Long` | Guest who initiated the payment |
+| `amount` | `Double` | Charged amount |
+| `currency` | `String` | Currency code |
+| `status` | `String` | Current `PaymentStatus` value |
+| `initPoint` | `String` | MercadoPago checkout URL |
+| `mercadoPagoPaymentId` | `String` | MP's internal payment ID (populated after webhook) |
+| `failureReason` | `String` | MP's `status_detail` if rejected |
+| `createdAt` | `LocalDateTime` | Creation timestamp |
+| `updatedAt` | `LocalDateTime` | Last update timestamp |
+
+## PaymentStatus values
+
+| Value | Meaning |
+|-------|---------|
+| `PENDING` | Preference created; guest has not yet completed checkout |
+| `APPROVED` | Payment confirmed by MercadoPago |
+| `REJECTED` | Payment declined; `failureReason` contains MP's status detail |
+| `REFUNDED` | Payment was reversed via the refund endpoint |
+| `CANCELLED` | Payment was cancelled |
+
+## Webhook processing
+
+MercadoPago sends a `POST` to `/api/payments/webhook` whenever a payment's status changes. This endpoint does not require authentication and should be registered in your MercadoPago application settings.
+
+```json
+{
+  "action": "payment.updated",
+  "type": "payment",
+  "data": {
+    "id": "12345678"
+  }
+}
+```
+
+When a webhook arrives with `type: "payment"`, the service:
+
+1. Fetches the full payment details from MercadoPago using the `data.id`.
+2. Looks up the internal payment record using the MercadoPago preference ID or `externalReference` (which equals the `reservationId`).
+3. Maps the MercadoPago status (`approved`, `rejected`, `refunded`, `cancelled`, `pending`) to the internal `PaymentStatus` enum.
+4. Updates the payment record.
+5. Triggers a post-payment action:
+   - **APPROVED**: Calls `PATCH /api/reservations/{id}/confirm` and sends a payment confirmation email.
+   - **REJECTED**: Calls `PATCH /api/reservations/{id}/cancel` and sends a payment rejected email.
+
+<Warning>
+The webhook endpoint at `/api/payments/webhook` must be reachable from MercadoPago's servers. Make sure it is not behind authentication middleware and that your gateway or firewall allows inbound requests from MercadoPago's IP ranges.
+</Warning>
+
+### Back-URL redirects
+
+After MercadoPago processes the payment, it redirects the guest based on the `autoReturn` setting:
+
+| Outcome | Redirect URL |
+|---------|--------------|
+| Approved | `https://ubik.app/payment/success` |
+| Failed | `https://ubik.app/payment/failure` |
+| Pending | `https://ubik.app/payment/pending` |
+
+## Refunds
+
+Only approved payments can be refunded. The service calls MercadoPago's refund API and then cancels the associated reservation.
+
+```bash
+curl -X POST https://your-gateway/api/payments/88/refund \
+  -H "Authorization: Bearer eyJhbGci..."
+```
+
+Returns the updated payment record with `status: REFUNDED`. Attempting to refund a payment that is not `APPROVED` returns `HTTP 500` with the message `Solo se pueden reembolsar pagos aprobados`.
+
+## Query endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/payments/{id}` | Single payment by ID |
+| `GET` | `/api/payments/reservation/{reservationId}` | All payments for a reservation |
+| `GET` | `/api/payments/user/{userId}` | All payments for a user |

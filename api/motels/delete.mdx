@@ -1,0 +1,72 @@
+---
+title: "Delete motel"
+description: "Permanently delete a motel. Requires authentication. Property owners can only delete their own motels."
+---
+
+## DELETE /api/motels/{id}
+
+Permanently removes a motel record from the system. This action cannot be undone.
+
+<Warning>
+  Deleting a motel is irreversible. All associated data for that motel record will be removed.
+</Warning>
+
+<Info>
+  You must be authenticated as a **Property Owner** or **Admin**. The API gateway forwards your identity via `X-User-Username` and `X-User-Role`.
+</Info>
+
+### Ownership check
+
+The endpoint enforces ownership before deleting:
+
+- **Admin** — can delete any motel without restriction.
+- **Property Owner** — the server resolves your user ID from `X-User-Username` and verifies that the motel's `propertyId` matches your ID. If it does not match, the request is rejected with `403 Forbidden`.
+
+Any other role receives `403 Forbidden` immediately.
+
+---
+
+## Path parameter
+
+<ParamField path="id" type="number" required>
+  Numeric ID of the motel to delete.
+</ParamField>
+
+## Required headers (set by the gateway)
+
+<ParamField header="X-User-Username" type="string" required>
+  Username of the authenticated caller.
+</ParamField>
+
+<ParamField header="X-User-Role" type="string" required>
+  Role ID of the caller.
+</ParamField>
+
+---
+
+## Response
+
+**`204 No Content`** — The motel was deleted successfully. The response body is empty.
+
+### Error responses
+
+| Status | Cause |
+|--------|-------|
+| `401 Unauthorized` | `X-User-Username` header is absent or blank. |
+| `403 Forbidden` | The caller's role is neither Property Owner nor Admin, or the property owner does not own the specified motel. |
+| `404 Not Found` | No motel exists with the given ID, or no user record exists for the username in `X-User-Username`. |
+
+---
+
+## Example
+
+<CodeGroup>
+
+```bash cURL
+curl --request DELETE \
+  --url https://api.example.com/api/motels/101 \
+  --header 'X-User-Username: ana.gomez' \
+  --header 'X-User-Role: <ROLE_ID_PROPERTY_OWNER>'
+```
+
+</CodeGroup>

@@ -1,0 +1,381 @@
+---
+title: "Azure deployment"
+description: "Deploy Ubik Backend on an Azure Linux VM with Azure Database for MySQL Flexible Server and systemd-managed autostart."
+---
+
+This guide walks you through deploying the Ubik Backend Docker Compose stack on an Azure Linux virtual machine, using Azure Database for MySQL Flexible Server as the managed database backend.
+
+## Architecture overview
+
+<CardGroup cols={2}>
+  <Card title="Azure Linux VM" icon="server">
+    Runs Docker and Docker Compose. All five microservice containers run here, fronted by Nginx as a reverse proxy.
+  </Card>
+  <Card title="Azure MySQL Flexible Server" icon="database">
+    Managed MySQL 8.0 instance. All services connect to it over the private Azure network via R2DBC.
+  </Card>
+</CardGroup>
+
+Nginx on the VM accepts public HTTPS traffic and proxies it to the gateway container on port 8080. The gateway routes requests to the four backend services, all of which communicate within the `ubik-network` Docker bridge network.
+
+## Prerequisites
+
+- An Azure subscription with permissions to create VMs and database servers
+- An Azure Linux VM (Ubuntu 22.04 LTS recommended) with at least 4 vCPUs and 8 GB RAM
+- Docker and Docker Compose installed on the VM
+- An Azure Database for MySQL Flexible Server instance
+- The repository cloned on the VM
+- Nginx installed on the VM
+
+## Step 1 — Set up Azure MySQL Flexible Server
+
+<Steps>
+
+<Step title="Create the Flexible Server instance">
+
+In the Azure Portal, navigate to **Azure Database for MySQL** and create a new **Flexible Server** instance.
+
+Recommended settings:
+
+| Setting | Value |
+|---------|-------|
+| Server name | `your-server-name` |
+| Region | Same region as your VM |
+| MySQL version | 8.0 |
+| Compute tier | Burstable (B2ms for development; General Purpose for production) |
+| Authentication | MySQL authentication only |
+| Admin username | `ubik_admin` |
+| Firewall | Allow access from your VM's private IP |
+
+</Step>
+
+<Step title="Configure firewall rules">
+
+Under **Networking** for your Flexible Server, add a firewall rule that allows incoming connections from your VM's private IP address. If your VM and database are in the same Azure Virtual Network, enable **Private access (VNet integration)** instead of public access.
+
+<Warning>
+Do not enable "Allow public access from any Azure service" in production. Restrict access to your VM's IP or use VNet integration.
+</Warning>
+
+</Step>
+
+<Step title="Create the application database and user">
+
+Connect to the Flexible Server from your VM using the MySQL client:
+
+```bash
+mysql -h your-server-name.mysql.database.azure.com \
+      -u ubik_admin \
+      -p
+```
+
+Once connected, create the database and a dedicated application user:
+
+```sql
+CREATE DATABASE ubik_db CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+CREATE USER 'ubik_user'@'%' IDENTIFIED BY 'your_strong_password';
+GRANT ALL PRIVILEGES ON ubik_db.* TO 'ubik_user'@'%';
+FLUSH PRIVILEGES;
+```
+
+</Step>
+
+</Steps>
+
+## Step 2 — Configure the R2DBC connection URL
+
+All services that connect to the database use the `SPRING_R2DBC_URL` variable. For Azure MySQL Flexible Server the URL format is:
+
+```
+r2dbc:mysql://<server-name>.mysql.database.azure.com:3306/<database-name>
+```
+
+For example:
+
+```bash
+SPRING_R2DBC_URL=r2dbc:mysql://your-server-name.mysql.database.azure.com:3306/ubik_db
+```
+
+<Note>
+Azure MySQL Flexible Server requires SSL connections by default. If you see SSL handshake errors, append `?sslMode=REQUIRED` to the URL: `r2dbc:mysql://your-server-name.mysql.database.azure.com:3306/ubik_db?sslMode=REQUIRED`.
+</Note>
+
+## Step 3 — Prepare the VM
+
+<Steps>
+
+<Step title="Install Docker and Docker Compose">
+
+```bash
+# Install Docker Engine
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker $USER
+
+# Install Docker Compose plugin
+sudo apt-get install -y docker-compose-plugin
+
+# Verify
+docker --version
+docker compose version
+```
+
+</Step>
+
+<Step title="Clone the repository">
+
+```bash
+git clone https://github.com/your-org/ubik-backend.git /home/azureuser/ubik-front
+cd /home/azureuser/ubik-front/microservicios/microreactivo
+```
+
+</Step>
+
+<Step title="Create the .env file">
+
+Create `/home/azureuser/ubik-front/microservicios/microreactivo/.env` with all required variables:
+
+```bash
+# Database — Azure MySQL Flexible Server
+SPRING_R2DBC_URL=r2dbc:mysql://your-server.mysql.database.azure.com:3306/ubik_db
+SPRING_R2DBC_USERNAME=ubik_user
+SPRING_R2DBC_PASSWORD=your_db_password
+
+# JWT
+JWT_SECRET=your_very_long_random_secret_at_least_32_chars
+JWT_EXPIRATION=86400000
+
+# Role IDs
+ROLE_ID_ADMIN=1
+ROLE_ID_PROPERTY_OWNER=2
+ROLE_ID_USER=3
+
+# Cloudinary
+CLOUDINARY_CLOUD_NAME=your_cloud_name
+CLOUDINARY_API_KEY=your_api_key
+CLOUDINARY_API_SECRET=your_api_secret
+
+# Email
+MAIL_USERNAME=notifications@your-domain.com
+MAIL_PASSWORD=your_gmail_app_password
+
+# MercadoPago
+MERCADOPAGO_ACCESS_TOKEN=APP_USR-your-access-token
+MERCADOPAGO_WEBHOOK_SECRET=your_webhook_secret
+MERCADOPAGO_CLIENT_ID=your_client_id
+MERCADOPAGO_CLIENT_SECRET=your_client_secret
+MERCADOPAGO_REDIRECT_URI=https://your-domain.com/api/payments/oauth/callback
+MP_FEE_PERCENT=10
+```
+
+</Step>
+
+<Step title="Do an initial build and test">
+
+Before configuring autostart, verify the stack runs correctly:
+
+```bash
+cd /home/azureuser/ubik-front/microservicios/microreactivo
+docker compose up --build -d
+
+# Wait for all services to become healthy (can take 3-5 minutes on first build)
+docker compose ps
+
+# Verify the gateway responds
+curl http://localhost:8080/actuator/health
+```
+
+If the gateway returns `{"status":"UP"}`, the deployment is working correctly. Stop the stack before proceeding:
+
+```bash
+docker compose down
+```
+
+</Step>
+
+</Steps>
+
+## Step 4 — Configure autostart with systemd
+
+Ubik ships two files for systemd-managed autostart: `ubik-start.sh` and `ubik-startup.service`. These ensure all containers restart automatically when the VM reboots.
+
+### The ubik-start.sh script
+
+`ubik-start.sh` is the launch script executed by systemd on VM boot. It:
+
+1. Waits until the Docker daemon is ready (polling every 3 seconds)
+2. Kills any processes occupying ports 8080, 8081, 8083, and 8084
+3. Tears down previous containers and prunes orphaned networks
+4. Runs `docker compose up -d` to start the full stack
+5. Polls the gateway's health endpoint up to 20 times (10-second intervals) to confirm it's responding
+6. Restarts Nginx to ensure it picks up any routing changes
+
+All output is appended to `/var/log/ubik-startup.log`.
+
+### The ubik-startup.service unit
+
+```ini
+[Unit]
+Description=Ubik Microservices Startup
+After=network-online.target docker.service
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/home/azureuser/ubik-start.sh
+RemainAfterExit=yes
+User=root
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
+```
+
+The unit runs after both `docker.service` and `network-online.target` are ready. `TimeoutStartSec=300` gives the full stack 5 minutes to build and start on first boot.
+
+### Installing the systemd service
+
+<Steps>
+
+<Step title="Copy the startup script">
+
+```bash
+sudo cp /home/azureuser/ubik-front/ubik-start.sh /home/azureuser/ubik-start.sh
+sudo chmod +x /home/azureuser/ubik-start.sh
+```
+
+</Step>
+
+<Step title="Install the service unit">
+
+```bash
+sudo cp /home/azureuser/ubik-front/ubik-startup.service \
+        /etc/systemd/system/ubik-startup.service
+```
+
+</Step>
+
+<Step title="Enable and start the service">
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable ubik-startup.service
+sudo systemctl start ubik-startup.service
+```
+
+</Step>
+
+<Step title="Verify the service status">
+
+```bash
+sudo systemctl status ubik-startup.service
+
+# Follow the startup log
+sudo tail -f /var/log/ubik-startup.log
+```
+
+</Step>
+
+</Steps>
+
+## Step 5 — Use the automated installer (recommended)
+
+For a faster setup, run the included `install-autostart-azure.sh` script as root. It automates the entire autostart configuration.
+
+```bash
+cd /home/azureuser/ubik-front/microservicios/microreactivo
+sudo ./install-autostart-azure.sh
+```
+
+The script:
+
+1. Detects the project directory automatically from its own location
+2. Creates `/usr/local/bin/docker-autostart.sh` — a startup script that waits for Docker, tears down old containers, runs `docker compose up -d`, and polls each service's health endpoint
+3. Installs `/etc/systemd/system/docker-autostart.service` with a 600-second timeout
+4. Runs `systemctl daemon-reload` and enables the service for autostart
+5. Creates `~/check-services.sh` — a status script that shows container health, service HTTP health checks, and the last 15 lines of the startup log
+6. Creates `~/emergency-restart.sh` — a script that tears down all containers, rebuilds images from scratch, and restarts the stack
+
+After installation, verify the setup:
+
+```bash
+# Check service status
+sudo systemctl status docker-autostart
+
+# Run the health check script
+~/check-services.sh
+```
+
+## Step 6 — Configure Nginx as a reverse proxy
+
+Nginx listens on port 443 (HTTPS) and proxies traffic to the gateway on port 8080. A minimal configuration:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name your-domain.com;
+
+    ssl_certificate     /etc/letsencrypt/live/your-domain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
+
+    location / {
+        proxy_pass         http://localhost:8080;
+        proxy_set_header   Host $host;
+        proxy_set_header   X-Real-IP $remote_addr;
+        proxy_set_header   X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+After editing the Nginx configuration, reload it:
+
+```bash
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+## Ongoing operations
+
+### View startup logs
+
+```bash
+# systemd journal (live)
+sudo journalctl -u ubik-startup.service -f
+
+# Startup script log file
+sudo tail -f /var/log/ubik-startup.log
+
+# Container logs
+docker compose logs -f
+```
+
+### Manual restart
+
+```bash
+cd /home/azureuser/ubik-front/microservicios/microreactivo
+docker compose down --remove-orphans
+docker compose up -d
+```
+
+### Emergency rebuild
+
+If containers fail to start after a code update or broken image, use the emergency restart script installed by `install-autostart-azure.sh`:
+
+```bash
+~/emergency-restart.sh
+```
+
+This stops all containers, prunes orphans, rebuilds all images with `--no-cache`, and restarts the stack.
+
+### Check port availability before starting
+
+If services fail to bind their ports, check for conflicts:
+
+```bash
+for PORT in 8080 8081 8083 8084 8085; do
+  echo "Port $PORT:"
+  lsof -i :$PORT 2>/dev/null || echo "  available"
+done
+```

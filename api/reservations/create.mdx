@@ -1,0 +1,163 @@
+---
+title: "Create reservation"
+description: "Create a new room reservation on behalf of the authenticated user."
+---
+
+Using this endpoint, any authenticated user can reserve a room. The server automatically resolves the `userId` from the `X-User-Username` header — you do not need to look up the user ID yourself.
+
+<Note>
+  Before creating a reservation, check whether the room is available for your desired dates using the [availability endpoint](#check-availability-first).
+</Note>
+
+## Check availability first
+
+```http
+GET /api/reservations/room/{roomId}/available?checkIn=...&checkOut=...
+```
+
+Returns `true` if the room has no overlapping confirmed or active reservations in the requested window, `false` otherwise.
+
+<ParamField path="roomId" type="integer" required>
+  The numeric ID of the room you want to check.
+</ParamField>
+
+<ParamField query="checkIn" type="string" required>
+  Check-in datetime in ISO 8601 format, e.g. `2026-06-01T14:00:00`.
+</ParamField>
+
+<ParamField query="checkOut" type="string" required>
+  Check-out datetime in ISO 8601 format, e.g. `2026-06-03T11:00:00`.
+</ParamField>
+
+**Response** — `true` or `false`.
+
+<CodeGroup>
+```bash cURL
+curl "https://api.example.com/api/reservations/room/5/available\
+?checkIn=2026-06-01T14:00:00&checkOut=2026-06-03T11:00:00"
+```
+</CodeGroup>
+
+---
+
+## Create a reservation
+
+```http
+POST /api/reservations
+```
+
+Creates a new reservation with an initial status of `PENDING`. The `userId` field in the request body is ignored — the server always resolves the user from the `X-User-Username` header to prevent impersonation.
+
+**Required headers**
+
+| Header | Description |
+|--------|-------------|
+| `X-User-Username` | Username of the authenticated user (set by the API gateway) |
+
+**Request body**
+
+<ParamField body="roomId" type="integer" required>
+  ID of the room to reserve.
+</ParamField>
+
+<ParamField body="userId" type="integer" required>
+  Included for schema compatibility, but overridden server-side with the ID resolved from `X-User-Username`. Pass any valid integer.
+</ParamField>
+
+<ParamField body="checkInDate" type="string" required>
+  Desired check-in datetime in ISO 8601 format. Must be a future date.
+</ParamField>
+
+<ParamField body="checkOutDate" type="string" required>
+  Desired check-out datetime in ISO 8601 format. Must be a future date and after `checkInDate`.
+</ParamField>
+
+<ParamField body="totalPrice" type="number" required>
+  Agreed total price for the stay. Must be greater than zero.
+</ParamField>
+
+<ParamField body="specialRequests" type="string">
+  Any special requests from the guest (e.g. late check-in, extra pillows). Maximum 500 characters.
+</ParamField>
+
+**Response** — `201 Created` with a [Reservation object](#reservation-object).
+
+<ResponseField name="id" type="integer">
+  Unique ID of the newly created reservation.
+</ResponseField>
+
+<ResponseField name="roomId" type="integer">
+  ID of the reserved room.
+</ResponseField>
+
+<ResponseField name="userId" type="integer">
+  ID of the guest who owns this reservation (resolved from the auth header).
+</ResponseField>
+
+<ResponseField name="checkInDate" type="string">
+  Confirmed check-in datetime.
+</ResponseField>
+
+<ResponseField name="checkOutDate" type="string">
+  Confirmed check-out datetime.
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Initial status: always `PENDING` on creation.
+</ResponseField>
+
+<ResponseField name="totalPrice" type="number">
+  Total price for the stay.
+</ResponseField>
+
+<ResponseField name="specialRequests" type="string">
+  Special requests recorded for this reservation.
+</ResponseField>
+
+<ResponseField name="confirmationCode" type="string">
+  Auto-generated unique confirmation code. Share this with the guest.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  ISO 8601 timestamp of creation.
+</ResponseField>
+
+<ResponseField name="updatedAt" type="string">
+  ISO 8601 timestamp of the last update.
+</ResponseField>
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://api.example.com/api/reservations \
+  -H "Content-Type: application/json" \
+  -H "X-User-Username: guest_carlos" \
+  -d '{
+    "roomId": 5,
+    "userId": 0,
+    "checkInDate": "2026-06-01T14:00:00",
+    "checkOutDate": "2026-06-03T11:00:00",
+    "totalPrice": 300000,
+    "specialRequests": "Late check-in after 10 PM, please."
+  }'
+```
+
+```json Response
+{
+  "id": 42,
+  "roomId": 5,
+  "userId": 17,
+  "checkInDate": "2026-06-01T14:00:00",
+  "checkOutDate": "2026-06-03T11:00:00",
+  "status": "PENDING",
+  "totalPrice": 300000,
+  "specialRequests": "Late check-in after 10 PM, please.",
+  "confirmationCode": "UBIK-A3F9X2",
+  "createdAt": "2026-03-17T10:00:00",
+  "updatedAt": "2026-03-17T10:00:00"
+}
+```
+</CodeGroup>
+
+<Tip>
+  After creating a reservation, proceed to [create a payment](/api/payments/create) to initiate the MercadoPago checkout flow for the guest.
+</Tip>

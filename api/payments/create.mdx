@@ -1,0 +1,199 @@
+---
+title: "Create payment"
+description: "Initiate a MercadoPago checkout for a reservation and retrieve payment records."
+---
+
+Payments are processed through MercadoPago. When you create a payment, the API creates a MercadoPago preference and returns an `initPoint` — a hosted checkout URL you redirect your guest to. After the guest completes payment, MercadoPago notifies the platform via [webhook](/api/payments/webhook), which updates the payment status and automatically confirms the reservation.
+
+## Endpoints
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `POST` | `/api/payments` | Required | Create a payment preference |
+| `GET` | `/api/payments/{id}` | Public | Get a payment by ID |
+| `GET` | `/api/payments/reservation/{reservationId}` | Public | List payments for a reservation |
+| `GET` | `/api/payments/user/{userId}` | Public | List payments for a user |
+| `POST` | `/api/payments/{id}/refund` | Required (Admin) | Refund an approved payment |
+
+---
+
+## Create a payment
+
+```http
+POST /api/payments
+```
+
+Creates a MercadoPago payment preference for the given reservation. Returns an `initPoint` URL that you redirect the guest to in order to complete payment.
+
+**Required headers**
+
+| Header | Description |
+|--------|-------------|
+| `X-User-Id` | Numeric ID of the authenticated user (set by the API gateway) |
+
+**Request body**
+
+<ParamField body="reservationId" type="integer" required>
+  ID of the reservation this payment covers.
+</ParamField>
+
+<ParamField body="amount" type="number" required>
+  Payment amount. Must be greater than zero.
+</ParamField>
+
+<ParamField body="currency" type="string">
+  ISO 4217 currency code. Defaults to `"COP"` if omitted.
+</ParamField>
+
+**Response** — `201 Created` with a [Payment object](#payment-object).
+
+The most important field in the response is `initPoint` — redirect your guest to this URL to open the MercadoPago hosted checkout page.
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://api.example.com/api/payments \
+  -H "Content-Type: application/json" \
+  -H "X-User-Id: 17" \
+  -d '{
+    "reservationId": 42,
+    "amount": 300000,
+    "currency": "COP"
+  }'
+```
+
+```json Response
+{
+  "id": 9,
+  "reservationId": 42,
+  "userId": 17,
+  "amount": 300000,
+  "currency": "COP",
+  "status": "PENDING",
+  "initPoint": "https://www.mercadopago.com.co/checkout/v1/redirect?pref_id=123456789-abc",
+  "mercadoPagoPaymentId": null,
+  "failureReason": null,
+  "createdAt": "2026-03-17T10:05:00",
+  "updatedAt": "2026-03-17T10:05:00"
+}
+```
+</CodeGroup>
+
+<Tip>
+  Redirect the guest to `initPoint` in the same browser session. After payment, MercadoPago sends a webhook to `/api/payments/webhook` which updates the status automatically — you do not need to poll.
+</Tip>
+
+---
+
+## Get a payment by ID
+
+```http
+GET /api/payments/{id}
+```
+
+<ParamField path="id" type="integer" required>
+  The numeric ID of the payment.
+</ParamField>
+
+**Response** — a single [Payment object](#payment-object).
+
+---
+
+## List payments for a reservation
+
+```http
+GET /api/payments/reservation/{reservationId}
+```
+
+<ParamField path="reservationId" type="integer" required>
+  The numeric ID of the reservation.
+</ParamField>
+
+**Response** — array of [Payment objects](#payment-object).
+
+---
+
+## List payments for a user
+
+```http
+GET /api/payments/user/{userId}
+```
+
+<ParamField path="userId" type="integer" required>
+  The numeric ID of the user.
+</ParamField>
+
+**Response** — array of [Payment objects](#payment-object).
+
+---
+
+## Refund a payment
+
+```http
+POST /api/payments/{id}/refund
+```
+
+Refunds a previously approved payment through MercadoPago. Only administrators can issue refunds.
+
+<Warning>
+  Only payments with status `APPROVED` can be refunded. Calling this on a `PENDING`, `REJECTED`, or already `REFUNDED` payment will return an error.
+</Warning>
+
+**Required headers**
+
+| Header | Description |
+|--------|-------------|
+| `X-User-Id` | Numeric ID of the authenticated admin user |
+
+<ParamField path="id" type="integer" required>
+  The numeric ID of the payment to refund.
+</ParamField>
+
+**Response** — `200 OK` with the updated [Payment object](#payment-object) showing `status: "REFUNDED"`.
+
+---
+
+## Payment object
+
+<ResponseField name="id" type="integer">
+  Unique identifier of the payment.
+</ResponseField>
+
+<ResponseField name="reservationId" type="integer">
+  ID of the reservation this payment is for.
+</ResponseField>
+
+<ResponseField name="userId" type="integer">
+  ID of the user who initiated the payment.
+</ResponseField>
+
+<ResponseField name="amount" type="number">
+  Payment amount.
+</ResponseField>
+
+<ResponseField name="currency" type="string">
+  ISO 4217 currency code (e.g. `"COP"`).
+</ResponseField>
+
+<ResponseField name="status" type="string">
+  Current payment status. One of `PENDING`, `APPROVED`, `REJECTED`, `REFUNDED`, `CANCELLED`.
+</ResponseField>
+
+<ResponseField name="initPoint" type="string">
+  MercadoPago hosted checkout URL. Present immediately after creation; redirect the guest here to complete payment.
+</ResponseField>
+
+<ResponseField name="mercadoPagoPaymentId" type="string">
+  MercadoPago's own payment ID, populated after the webhook is received.
+</ResponseField>
+
+<ResponseField name="failureReason" type="string">
+  Human-readable reason if the payment was rejected, otherwise `null`.
+</ResponseField>
+
+<ResponseField name="createdAt" type="string">
+  ISO 8601 timestamp of creation.
+</ResponseField>
+
+<ResponseField name="updatedAt" type="string">
+  ISO 8601 timestamp of the last status update.
+</ResponseField>
